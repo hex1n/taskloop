@@ -14,7 +14,8 @@
   envelope(files/git/destructive/network)
   budget(rounds/writes/wall-clock)→ 挂在任务上,episode 永不重置
   spent + evidence(writes、touched_files——监理观察所得)
-  episodes[]:每次连续运行一条,outcome ∈ green|stuck|out_of_budget|needs_input|detached
+  episodes[]:每次连续运行一条,outcome ∈ green(任务收 done/not_needed)|
+             stuck|out_of_budget|needs_input(挂起,任务保持 open)|detached(被后一会话顶替)
   state ∈ open|done|not_needed|abandoned
 ```
 
@@ -42,9 +43,10 @@ node taskloop/bin/taskloop.mjs open --repo . \
   --alignment "green ⇒ goal because …; not covered: …" --files "src/**"
 ```
 
-Hook 接线(dogfood 用;不随 v1 安装器分发):把 PreToolUse/Stop 指到
-`node <repo>/taskloop/bin/taskloop.mjs`,payload 走 stdin——与 v1 hook 协议
-相同,可并挂。控制器程序卡在 [programs/](programs/)。
+Hook 接线由 `bootstrap/install.mjs` 自动注册;手动接线跑 `taskloop.mjs hooks`
+打印 PreToolUse/Stop 配置(payload 走 stdin)。控制器程序不在 taskloop 内
+重复一份——它们就是分发的 skills:`converge`、`workloop`、`judgment-loop`、
+`meta-loop`,共享参考见 [../skills/loop-core/REFERENCE.md](../skills/loop-core/REFERENCE.md)。
 
 ## 担保边界(与 v1 同一信任模型,更少的门)
 
