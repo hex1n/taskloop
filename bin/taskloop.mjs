@@ -104,6 +104,7 @@ function appendLedger(repo, task, extra = {}) {
       criterion_input_coverage: task.criterion_input_coverage ?? "full",
       review_level: strongestReviewLevel(task),
       self_granted: (Array.isArray(task.grants) ? task.grants : []).filter((g) => g?.granted_by === "self").length,
+      output_tokens_estimate: spentTokens(task),
       ...extra,
     };
     fs.appendFileSync(path.join(dir, LEDGER_FILE), JSON.stringify(row) + "\n", "utf8");
@@ -396,6 +397,54 @@ function closeEpisode(task, outcome) {
   return episode;
 }
 
+// Token accounting is telemetry, never a trap: the runtime's transcript
+// carries per-message usage, and each hook event tallies only the appended
+// tail (byte offset per episode, counted up to the last complete line). A
+// runtime without a transcript, or with a different schema, degrades to an
+// estimate of 0 — it never blocks the loop by itself.
+function tallyEpisodeTokens(task, payload) {
+  const transcript = String(payload?.transcript_path ?? "").trim();
+  if (!transcript) return;
+  const episode = activeEpisode(task);
+  if (!episode) return;
+  try {
+    if (episode.transcript !== transcript) {
+      episode.transcript = transcript;
+      episode.transcript_offset = 0;
+      episode.output_tokens = episode.output_tokens ?? 0;
+    }
+    const size = fs.statSync(transcript).size;
+    if (size <= episode.transcript_offset) return;
+    const fd = fs.openSync(transcript, "r");
+    let tail;
+    try {
+      const buf = Buffer.alloc(size - episode.transcript_offset);
+      fs.readSync(fd, buf, 0, buf.length, episode.transcript_offset);
+      tail = buf.toString("utf8");
+    } finally {
+      fs.closeSync(fd);
+    }
+    // Only count up to the last complete line; a partially flushed line is
+    // left for the next tally instead of being skipped past.
+    const lastNewline = tail.lastIndexOf("\n");
+    if (lastNewline < 0) return;
+    const complete = tail.slice(0, lastNewline + 1);
+    let sum = 0;
+    for (const m of complete.matchAll(/"output_tokens"\s*:\s*(\d+)/g)) sum += Number.parseInt(m[1], 10) || 0;
+    episode.output_tokens = (episode.output_tokens ?? 0) + sum;
+    episode.transcript_offset += lastNewline + 1;
+  } catch {
+    /* telemetry: degrade, never trap */
+  }
+}
+
+function spentTokens(task) {
+  return (Array.isArray(task.episodes) ? task.episodes : []).reduce(
+    (sum, ep) => sum + (Number.isFinite(ep?.output_tokens) ? ep.output_tokens : 0),
+    0,
+  );
+}
+
 function ensureEpisode(task, session) {
   const sid = String(session ?? "").trim() || "unknown";
   let episode = activeEpisode(task);
@@ -495,6 +544,7 @@ const CLI_OPTIONS = {
     rounds: { type: "string", default: String(DEFAULT_ROUNDS) },
     writes: { type: "string", default: "0" },
     "wall-clock-minutes": { type: "string", default: "0" },
+    "token-budget": { type: "string", default: "0" },
     "criterion-timeout-seconds": { type: "string", default: String(CRITERION_TIMEOUT_SECONDS) },
     "destructive-allowed": { type: "boolean", default: false },
     "network-allowed": { type: "boolean", default: false },
@@ -667,6 +717,7 @@ function cmdOpen(values) {
       rounds: Number.parseInt(String(values.rounds), 10) || DEFAULT_ROUNDS,
       writes: Number.parseInt(String(values.writes), 10) || 0,
       wall_clock_minutes: Number.parseInt(String(values["wall-clock-minutes"]), 10) || 0,
+      tokens: Number.parseInt(String(values["token-budget"]), 10) || 0,
     },
     spent: { rounds: 0, opened_at: utcNow() },
     evidence: { writes: 0, touched_files: [], criterion_input_drift: false },
@@ -957,6 +1008,7 @@ function hookPretool(payload, repo, task) {
   const tool = String(payload.tool_name ?? "");
   const mapping = isPlainObject(payload.tool_input) ? payload.tool_input : {};
   const { resumed } = ensureEpisode(task, payload.session_id);
+  tallyEpisodeTokens(task, payload);
   if (resumed) process.stderr.write(resumeBanner(task));
 
   const ops = gitOps(mapping);
@@ -1019,6 +1071,13 @@ function hookPretool(payload, repo, task) {
       );
     }
   }
+  if ((budget.tokens ?? 0) > 0 && spentTokens(task) > budget.tokens) {
+    saveTask(repo, task);
+    return deny(
+      `taskloop: token budget exhausted (~${spentTokens(task)}/${budget.tokens} output tokens). ` +
+        "Verification still runs: verify and stop, suspend --judgment, or abandon --reason.",
+    );
+  }
 
   task.evidence.writes += 1;
   for (const raw of targets) {
@@ -1044,6 +1103,7 @@ function suspendByMachine(repo, task, outcome, note) {
 
 function hookStop(payload, repo, task) {
   const { resumed } = ensureEpisode(task, payload.session_id);
+  tallyEpisodeTokens(task, payload);
   if (resumed) process.stderr.write(resumeBanner(task));
 
   const verdict = runCriterion(task.criterion, repo, task.criterion_timeout_seconds);
