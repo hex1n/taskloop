@@ -16,6 +16,7 @@
   spent + evidence(writes、touched_files——监理观察所得)
   episodes[]:每次连续运行一条,outcome ∈ green(任务收 done/not_needed)|
              stuck|out_of_budget|needs_input(挂起,任务保持 open)|detached(被后一会话顶替)
+  reviews[]:独立审查 provenance(level ∈ self-reread<fresh-context<second-model,非 verdict)
   state ∈ open|done|not_needed|abandoned
 ```
 

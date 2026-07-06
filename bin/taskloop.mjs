@@ -32,6 +32,16 @@ const STUCK_REPEATS = 3;
 const CRITERION_TIMEOUT_SECONDS = 120;
 const TOUCHED_FILES_CAP = 50;
 const VALID_SUSPEND_OUTCOMES = new Set(["needs_input", "stuck", "out_of_budget"]);
+// The independence ladder, weakest → strongest. A review's value comes from
+// how independent the reviewer's failure modes are from the author's:
+// self-reread shares everything; fresh-context washes session-state
+// contamination (optimism, sunk cost, tunnel vision) but not model-level blind
+// spots; second-model washes those too (uncorrelated weights). The engine
+// records which level a task got — provenance, not a verdict — so the outcome
+// ledger makes "closed without independent review" visible; it never gates
+// `done` on it (a review is a probabilistic signal fed back into the loop
+// body, not an objective criterion).
+const REVIEW_LEVELS = ["self-reread", "fresh-context", "second-model"];
 
 // ---------- small helpers ----------
 
@@ -91,6 +101,7 @@ function appendLedger(repo, task, extra = {}) {
       episodes: Array.isArray(task.episodes) ? task.episodes.length : 0,
       criterion_input_drift: Boolean(task.evidence?.criterion_input_drift),
       criterion_input_coverage: task.criterion_input_coverage ?? "full",
+      review_level: strongestReviewLevel(task),
       ...extra,
     };
     fs.appendFileSync(path.join(dir, LEDGER_FILE), JSON.stringify(row) + "\n", "utf8");
@@ -477,6 +488,12 @@ const CLI_OPTIONS = {
   done: { repo: { type: "string" } },
   abandon: { repo: { type: "string" }, reason: { type: "string" } },
   "not-needed": { repo: { type: "string" }, evidence: { type: "string" } },
+  review: {
+    repo: { type: "string" },
+    level: { type: "string" },
+    reviewer: { type: "string" },
+    findings: { type: "string" },
+  },
   hooks: { repo: { type: "string" } },
 };
 
@@ -710,6 +727,46 @@ function cmdNotNeeded(values) {
   saveTask(repo, task);
   appendLedger(repo, task, { evidence });
   process.stdout.write("closed as not-needed; recorded in the outcome ledger\n");
+  return 0;
+}
+
+// Record that an independent perspective reviewed this task, at what
+// independence level. The finding itself is fed back into the loop body (the
+// agent reads it and fixes or rebuts) — this only records the provenance so the
+// ledger shows how independently a task was checked before it closed.
+function strongestReviewLevel(task) {
+  const reviews = Array.isArray(task.reviews) ? task.reviews : [];
+  let best = -1;
+  for (const r of reviews) {
+    const i = REVIEW_LEVELS.indexOf(String(r?.level ?? ""));
+    if (i > best) best = i;
+  }
+  return best >= 0 ? REVIEW_LEVELS[best] : "none";
+}
+
+function cmdReview(values) {
+  const repo = repoFromArg(values.repo);
+  const task = requireOpenTask(repo);
+  if (!task) return 1;
+  const level = String(values.level ?? "").trim();
+  if (!REVIEW_LEVELS.includes(level)) {
+    return cliError(
+      `--level must be one of ${REVIEW_LEVELS.join(", ")} ` +
+        "(weakest→strongest independence); prefer second-model, and record a downgrade honestly",
+    );
+  }
+  if (!Array.isArray(task.reviews)) task.reviews = [];
+  const record = { at: utcNow(), level };
+  const reviewer = String(values.reviewer ?? "").trim();
+  if (reviewer) record.reviewer = reviewer;
+  const findings = Number.parseInt(String(values.findings ?? ""), 10);
+  if (Number.isFinite(findings)) record.findings = findings;
+  task.reviews.push(record);
+  saveTask(repo, task);
+  process.stdout.write(
+    `recorded ${level} review${reviewer ? ` by ${reviewer}` : ""}; ` +
+      "the finding goes back into the loop body — this records only that it happened\n",
+  );
   return 0;
 }
 
@@ -1025,6 +1082,8 @@ function cmdHelp() {
       "  done                       # runs the criterion; green is the only path\n" +
       '  abandon  --reason "<why>"\n' +
       '  not-needed --evidence "<read-only check>"\n' +
+      '  review   --level second-model|fresh-context|self-reread [--reviewer <id>] [--findings N]\n' +
+      "             # records review provenance (not a verdict); ledger shows the strongest level\n" +
       '  amend    --criterion/--files/--rounds --reason "<why>"\n\n' +
       "  hooks                      # print paste-ready Claude/Codex hook wiring\n\n" +
       "hooks: pipe the runtime's PreToolUse/Stop JSON payload on stdin.\n" +
@@ -1051,6 +1110,7 @@ function main() {
     if (argv[0] === "suspend") return cmdSuspend(values);
     if (argv[0] === "done") return cmdDone(values);
     if (argv[0] === "abandon") return cmdAbandon(values);
+    if (argv[0] === "review") return cmdReview(values);
     return cmdNotNeeded(values);
   }
 
