@@ -1,10 +1,10 @@
 # taskloop — task-first 循环工程(净室 v2 实现)
 
 设计出处:[docs/plans/2026-07-06-loop-v2-task-first.md](../docs/plans/2026-07-06-loop-v2-task-first.md)。
-这是那份白纸设计的**独立实现**,与 v1(`bootstrap/` 的 agent-loop 机器)平行
-共存:自己的状态目录(`.taskloop/`,gitignored)、自己的结局账
-(`~/.taskloop/outcomes.jsonl`)、零共享代码。v1 仍是生产系统;两套的去留由
-设计文档里预注册的第二波判别探针裁决,不由偏好裁决。
+这是那份白纸设计的实现,也是本仓**唯一的循环系统**:自己的状态目录
+(`.taskloop/`,gitignored)、自己的结局账(`~/.taskloop/outcomes.jsonl`)。
+由 `bootstrap/install.mjs` 分发到 `~/bin` 并注册 PreToolUse/Stop hook。
+(历史:它曾以净室实现与旧的 v1 agent-loop 机器并行,v1 已删除。)
 
 ## 对象模型:Task 是一等公民,Episode 挂在它下面
 

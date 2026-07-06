@@ -1,8 +1,8 @@
 #!/usr/bin/env node
-// taskloop — clean-room implementation of the task-first loop engineering
-// design (docs/plans/2026-07-06-loop-v2-task-first.md). Parallel to, and
-// fully independent of, the v1 agent-loop machinery: own state dir
-// (.taskloop/), own outcome ledger (~/.taskloop/), no shared code.
+// taskloop — the task-first loop system (design:
+// docs/plans/2026-07-06-loop-v2-task-first.md). Self-contained: own state dir
+// (.taskloop/), own outcome ledger (~/.taskloop/). Distributed to ~/bin and
+// wired as the PreToolUse/Stop hooks by bootstrap/install.mjs.
 //
 // Object model: the TASK is the durable unit (goal, criterion, alignment,
 // envelope, budgets, evidence); EPISODES come and go underneath it. Budgets
@@ -958,15 +958,16 @@ function hookStop(payload, repo, task) {
   );
 }
 
-// Paste-ready hook wiring for dogfooding. Safe alongside the v1 agent-loop
-// hooks: each supervisor is inert in a repo without its own state dir
-// (.taskloop/ here, .agent-loop/ there), so both can stay registered.
+// Paste-ready hook wiring. bootstrap/install.mjs already wires this on install;
+// this prints the manual form for a dogfood checkout or a hand-managed runtime.
+// The supervisor is inert in any repo without a .taskloop/ task, so it is safe
+// to leave registered globally.
 function cmdHooks() {
   const script = path.resolve(process.argv[1] ?? "taskloop.mjs");
   const command = `node "${script}"`;
   process.stdout.write(
-    "# taskloop hook wiring — coexists with the agent-loop v1 hooks (each is\n" +
-      "# inert without its own state dir; no repo triggers both by accident).\n\n" +
+    "# taskloop hook wiring — install.mjs wires this for you; this is the manual\n" +
+      "# form. The supervisor is inert without a .taskloop/ task, safe left on.\n\n" +
       '# Claude Code — merge into the "hooks" object of ~/.claude/settings.json:\n' +
       JSON.stringify(
         {
