@@ -577,6 +577,7 @@ function cmdOpen(values) {
       return { criterion_inputs: inputs, criterion_input_coverage: partial ? "partial" : "full" };
     })(),
     criterion_timeout_seconds: timeoutSec,
+    keep_green: Boolean(values["keep-green"]),
     alignment: String(values.alignment).trim(),
     progress: String(values.progress ?? "").trim() || null,
     envelope: {
@@ -951,6 +952,13 @@ function hookStop(payload, repo, task) {
   if (resumed) process.stderr.write(resumeBanner(task));
 
   const verdict = runCriterion(task.criterion, repo, task.criterion_timeout_seconds);
+  if (verdict.verdict === "pass" && task.keep_green) {
+    // Green is a keep-green task's steady state, not a success event: the
+    // fresh-green door stays shut and only an explicit verb closes the task.
+    task.stall = { signature: null, count: 0, history: [] };
+    saveTask(repo, task);
+    return 0;
+  }
   if (verdict.verdict === "pass") {
     warnOnInputDrift(task, repo);
     closeEpisode(task, "green");
