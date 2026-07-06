@@ -239,10 +239,10 @@ function criterionInputDrift(task, repo) {
     } catch {
       current = "missing";
     }
-    if (current !== String(entry.hash ?? "")) {
-      changed.push(String(entry.path));
-      entry.hash = current;
-    }
+    // Pure detection: never re-baseline here, or the first observation would
+    // disarm the gate and the next close attempt would sail through. The
+    // fingerprint moves only through amend --criterion --reason.
+    if (current !== String(entry.hash ?? "")) changed.push(String(entry.path));
   }
   return changed;
 }
@@ -623,13 +623,19 @@ function requireOpenTask(repo) {
   return task;
 }
 
-function warnOnInputDrift(task, repo, sink = process.stderr) {
+// A green whose check files changed since fingerprinting is a moved sensor,
+// not a proof: both close doors refuse it. The gate is machine-observable and
+// the blessed path is cheap — amend --criterion --reason re-fingerprints and
+// records why the check legitimately moved. The evidence flag stays true for
+// the ledger: the drift event is history even after the re-bless.
+function gateOnInputDrift(task, repo, sink = process.stderr) {
   const drift = criterionInputDrift(task, repo);
   if (drift.length) {
     task.evidence.criterion_input_drift = true;
     sink.write(
-      `warning: criterion input files changed since open: ${drift.join(", ")} — ` +
-        "a green from an edited check needs a recorded reason (amend --criterion --reason)\n",
+      `criterion input files changed since they were fingerprinted: ${drift.join(", ")} — ` +
+        "the sensor itself moved, so this green cannot close the task. " +
+        "Re-bless the move: amend --criterion --reason <why the check legitimately changed>, then close.\n",
     );
   }
   return drift;
@@ -664,7 +670,11 @@ function cmdDone(values) {
     );
     return 1;
   }
-  warnOnInputDrift(task, repo);
+  if (gateOnInputDrift(task, repo).length) {
+    saveTask(repo, task);
+    process.stderr.write("done refused: drift green — see above for the amend --criterion --reason path.\n");
+    return 1;
+  }
   closeEpisode(task, "green");
   task.state = "done";
   task.closed_at = utcNow();
@@ -964,7 +974,12 @@ function hookStop(payload, repo, task) {
     return 0;
   }
   if (verdict.verdict === "pass") {
-    warnOnInputDrift(task, repo);
+    if (gateOnInputDrift(task, repo).length) {
+      // Non-closure, like a suspend: the turn may end, but this green does
+      // not open the done door. The task stays open for the re-bless.
+      saveTask(repo, task);
+      return 0;
+    }
     closeEpisode(task, "green");
     task.state = "done";
     task.closed_at = utcNow();
