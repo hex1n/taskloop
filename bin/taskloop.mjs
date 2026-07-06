@@ -102,6 +102,7 @@ function appendLedger(repo, task, extra = {}) {
       criterion_input_drift: Boolean(task.evidence?.criterion_input_drift),
       criterion_input_coverage: task.criterion_input_coverage ?? "full",
       review_level: strongestReviewLevel(task),
+      self_granted: (Array.isArray(task.grants) ? task.grants : []).filter((g) => g?.granted_by === "self").length,
       ...extra,
     };
     fs.appendFileSync(path.join(dir, LEDGER_FILE), JSON.stringify(row) + "\n", "utf8");
@@ -468,6 +469,7 @@ const CLI_OPTIONS = {
     "network-allowed": { type: "boolean", default: false },
     "install-scripts-allowed": { type: "boolean", default: false },
     "keep-green": { type: "boolean", default: false },
+    "granted-by": { type: "string", default: "self" },
     reason: { type: "string" },
     force: { type: "boolean", default: false },
   },
@@ -479,6 +481,7 @@ const CLI_OPTIONS = {
     files: { type: "string", multiple: true },
     rounds: { type: "string" },
     reason: { type: "string" },
+    "granted-by": { type: "string", default: "self" },
   },
   suspend: {
     repo: { type: "string" },
@@ -501,6 +504,36 @@ function repoFromArg(value) {
   const raw = String(value ?? process.cwd()).trim() || process.cwd();
   const expanded = raw.startsWith("~") ? path.join(home(), raw.slice(1)) : raw;
   return path.resolve(expanded);
+}
+
+// Authority expansions are grants with provenance. The machine cannot verify
+// the judgment behind an expansion — it can only record who made it, so the
+// ledger shows how much of a task's authority was self-declared. A grant is a
+// record, never a gate.
+const GRANT_PROVENANCES = new Set(["self", "user"]);
+const WHOLE_REPO_GLOB = /^(\*\*(\/\*)?|\.|\*)$/;
+
+function collectGrants({ grantedBy, values, files, sink = process.stderr }) {
+  const grants = [];
+  const at = utcNow();
+  const push = (scope, reason = null) => grants.push({ at, scope, granted_by: grantedBy, reason });
+  if (values["destructive-allowed"]) push("destructive");
+  if (values["network-allowed"]) push("network");
+  if (values["install-scripts-allowed"]) push("install-scripts");
+  for (const op of (values["git-allowed"] ?? []).map((o) => String(o).toLowerCase())) {
+    push(`git:${op}`, String(values["git-reason"] ?? "").trim() || null);
+  }
+  for (const glob of files) {
+    if (!WHOLE_REPO_GLOB.test(String(glob).trim())) continue;
+    push(`envelope:${glob}`);
+    if (grantedBy === "self") {
+      sink.write(
+        `warning: whole-repo envelope "${glob}" is self-granted breadth — ` +
+          "prefer the narrowest globs, or record --granted-by user when the human granted it\n",
+      );
+    }
+  }
+  return grants;
 }
 
 function cmdOpen(values) {
@@ -526,6 +559,10 @@ function cmdOpen(values) {
   }
   if (values["keep-green"] && !String(values.reason ?? "").trim()) {
     return cliError("--keep-green requires --reason <why a green start is intentional>");
+  }
+  const grantedBy = String(values["granted-by"] ?? "self").trim() || "self";
+  if (!GRANT_PROVENANCES.has(grantedBy)) {
+    return cliError('--granted-by must be "self" or "user" — provenance is recorded as stated, never invented');
   }
   const existing = loadTask(repo);
   if (existing && existing.state === "open" && !values.force) {
@@ -604,6 +641,7 @@ function cmdOpen(values) {
     episodes: [],
     amendments: [],
     reviews: [],
+    grants: collectGrants({ grantedBy, values, files }),
   };
   saveTask(repo, task);
   process.stdout.write(`opened ${taskPath(repo)} (budget: ${task.budget.rounds} rounds)\n`);
@@ -811,6 +849,12 @@ function cmdAmend(values) {
   if (addFiles.length) {
     amendment.files_added = addFiles;
     task.envelope.files = [...new Set([...task.envelope.files, ...addFiles])];
+    const grantedBy = String(values["granted-by"] ?? "self").trim() || "self";
+    if (!GRANT_PROVENANCES.has(grantedBy)) {
+      return cliError('--granted-by must be "self" or "user" — provenance is recorded as stated, never invented');
+    }
+    if (!Array.isArray(task.grants)) task.grants = [];
+    task.grants.push(...collectGrants({ grantedBy, values: {}, files: addFiles }));
   }
   if (rounds) {
     amendment.rounds = { from: task.budget.rounds, to: Number.parseInt(rounds, 10) || task.budget.rounds };
