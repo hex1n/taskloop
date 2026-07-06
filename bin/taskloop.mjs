@@ -421,13 +421,43 @@ function touchedSummary(task, limit = 10) {
   return `(${touched.length}): ${shown}${extra}`;
 }
 
+// Machine-generated memory of what was tried: no judgment, just each failed
+// close attempt's identity (signature) and first output line (head), capped so
+// the task file stays small. Both close doors record through here.
+const ATTEMPTS_CAP = 20;
+
+function recordAttempt(task, verdict, signature) {
+  if (!Array.isArray(task.attempts)) task.attempts = [];
+  const firstLine = String(verdict.output ?? "").trim().split(/\r?\n/)[0] ?? "";
+  task.attempts.push({
+    at: utcNow(),
+    round: task.spent?.rounds ?? 0,
+    exit: verdict.exit ?? null,
+    signature,
+    head: firstLine.slice(0, 160),
+  });
+  while (task.attempts.length > ATTEMPTS_CAP) task.attempts.shift();
+}
+
+function deadEndsSummary(task) {
+  const attempts = Array.isArray(task.attempts) ? task.attempts : [];
+  if (!attempts.length) return "";
+  const distinct = new Set(attempts.map((a) => a.signature)).size;
+  return (
+    `; dead-ends: ${attempts.length} failed attempt${attempts.length === 1 ? "" : "s"} ` +
+    `(${distinct} distinct) — last: ${attempts.at(-1).head || "(no output)"}`
+  );
+}
+
 function resumeBanner(task) {
   const prev = (task.episodes ?? []).at(-2);
   return (
     `taskloop: resuming episode ${task.episodes.length}` +
     (prev?.outcome ? ` (previous: ${prev.outcome})` : "") +
     `; snapshot: ${task.snapshot?.judgment ?? "none recorded"}` +
-    `; machine-observed changed files ${touchedSummary(task)}\n`
+    `; machine-observed changed files ${touchedSummary(task)}` +
+    deadEndsSummary(task) +
+    "\n"
   );
 }
 
@@ -642,6 +672,7 @@ function cmdOpen(values) {
     amendments: [],
     reviews: [],
     grants: collectGrants({ grantedBy, values, files }),
+    attempts: [],
   };
   saveTask(repo, task);
   process.stdout.write(`opened ${taskPath(repo)} (budget: ${task.budget.rounds} rounds)\n`);
@@ -688,9 +719,10 @@ function cmdDone(values) {
     // Metered like a blocked stop: a refused done burns a round, so retrying
     // `done` against a flaky criterion cannot fish for a false green for free.
     task.spent.rounds += 1;
+    const tail = outputTail(verdict.output);
+    recordAttempt(task, verdict, fnv1aHex(`${verdict.exit}|${tail}`));
     saveTask(repo, task);
     const overBudget = task.spent.rounds >= task.budget.rounds;
-    const tail = outputTail(verdict.output);
     process.stderr.write(
       `done refused: the criterion is red (round ${task.spent.rounds}/${task.budget.rounds}): ${task.criterion}\n` +
         (tail ? `--- criterion output (tail) ---\n${tail}\n` : "") +
@@ -1045,6 +1077,7 @@ function hookStop(payload, repo, task) {
   task.spent.rounds += 1;
   const tail = outputTail(verdict.output);
   const signature = fnv1aHex(`${verdict.exit}|${tail}`);
+  recordAttempt(task, verdict, signature);
   if (task.stall.signature === signature) task.stall.count += 1;
   else {
     task.stall.signature = signature;
