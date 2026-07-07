@@ -235,6 +235,19 @@ function runCriterion(criterion, repo, timeoutSec = CRITERION_TIMEOUT_SECONDS) {
     if (err.signal || err.code === "ETIMEDOUT") {
       return { verdict: "fail", exit: null, output, detail: `timed out after ${timeoutSec}s` };
     }
+    // A spawn the environment refuses outright (observed live: a Codex win32
+    // sandbox EPERM-ing the shell itself) is not a path problem — the
+    // "absolute path" hint sends the agent down a dead end of rewrites.
+    if (err.code === "EPERM" || err.code === "EACCES") {
+      return {
+        verdict: "not_executable",
+        exit: null,
+        output,
+        detail:
+          "cannot execute (the environment blocked the spawn itself — sandbox, ACL, or execute bit; " +
+          "rerun with escalated permissions, or suspend --outcome needs_input)",
+      };
+    }
     const status = typeof err.status === "number" ? err.status : null;
     // 9009 is cmd.exe's "not recognized" — Windows' 127. A nonexistent binary
     // must refuse as not-executable, not pass for a legitimate birth red.
@@ -457,8 +470,22 @@ function looksLikeWrite(tool, mapping) {
   return false;
 }
 
+// apply_patch packs many files into one call; without reading the patch body
+// the envelope (and the untracked nudge) would be blind to every one of them —
+// the exact tool shape of the observed multi-file-landing incident.
+function patchFileTargets(mapping) {
+  const targets = [];
+  for (const value of Object.values(mapping ?? {})) {
+    if (typeof value !== "string" || !value.includes("*** ")) continue;
+    const re = /^\*\*\* (?:Add|Update|Delete) File: (.+)$/gm;
+    let m;
+    while ((m = re.exec(value)) !== null) targets.push(m[1].trim());
+  }
+  return targets;
+}
+
 function writeFileTargets(tool, mapping) {
-  const targets = [...fileFieldValues(mapping)];
+  const targets = [...fileFieldValues(mapping), ...patchFileTargets(mapping)];
   for (const command of commandValues(mapping)) targets.push(...redirectTargets(command));
   return [...new Set(targets)];
 }
@@ -847,6 +874,7 @@ function cmdOpen(values) {
   };
   saveTask(repo, task);
   appendLedger(repo, task);
+  clearUntracked(repo); // the task absorbs the untracked slate
   if (task.criterion_provenance === "state-dir") {
     process.stderr.write(
       "criterion provenance: state-dir — a session-authored checker guards this task. " +
@@ -1152,6 +1180,123 @@ function repoFromPayload(payload) {
   }
 }
 
+// ---------- untracked writes: the nudge before the loop ----------
+//
+// With no open task the machine used to be fully blind — the one decision the
+// whole system left to prose was "should this work have opened a task?", and a
+// live Codex session answered it wrong (multi-file landing, zero taskloop).
+// The contract already defines the machine-checkable half: lightweight means
+// SINGLE-FILE. So reads stay free, the first written file passes with a nudge,
+// and the second distinct file gates until a task is opened.
+//
+// The gate counts only what it can attribute honestly: structured file fields,
+// patch-body file lines, and unquoted shell redirects, folded case-insensitively
+// where the filesystem is. Git discipline stays with the in-task envelope;
+// writes outside this repo, writes with no extractable target (bare shell
+// edits like sed -i — a known, accepted miss: guessing positional args would
+// gate reads, and a false deny costs more than a missed nudge), and calls
+// with no session identity nudge but never gate. Parallel calls that spread
+// files before any response lands each get the same deny with the same open
+// template — the gate is per-call, deliberately.
+
+const UNTRACKED_FILE = "untracked-writes.json";
+const UNTRACKED_TTL_MS = 24 * 60 * 60 * 1000;
+
+function untrackedPath(repo) {
+  return path.join(repo, STATE_DIR, UNTRACKED_FILE);
+}
+
+function clearUntracked(repo) {
+  try {
+    fs.rmSync(untrackedPath(repo), { force: true });
+  } catch {
+    /* best-effort: a stale slate only re-nudges */
+  }
+}
+
+function loadUntracked(repo) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(untrackedPath(repo), "utf8"));
+    if (isPlainObject(parsed) && isPlainObject(parsed.sessions)) return parsed;
+  } catch {
+    /* missing or corrupt scratch is an empty slate */
+  }
+  return { sessions: {} };
+}
+
+// A quoted argument is data, not shell syntax: `grep "x > 5"` must stay a
+// read, and `sed 's/a>b/c/' f` must not mint a phantom redirect target.
+function stripQuotedSegments(command) {
+  return String(command).replace(/"[^"]*"|'[^']*'/g, " ");
+}
+
+// Case-fold the tracked key where the filesystem does, so a.txt and A.TXT
+// stay one file on win32/darwin instead of a false multi-file deny.
+const foldCase =
+  process.platform === "win32" || process.platform === "darwin" ? (s) => s.toLowerCase() : (s) => s;
+
+function repoInsideRelative(repo, raw) {
+  const rel = repoRelative(repo, raw);
+  if (!rel) return null;
+  const root = path.resolve(String(repo));
+  const abs = path.resolve(root, String(raw).replace(/\\/g, "/"));
+  return abs.startsWith(root + path.sep) ? rel : null;
+}
+
+function hookUntrackedPretool(payload, repo) {
+  const tool = String(payload.tool_name ?? "");
+  const rawMapping = isPlainObject(payload.tool_input) ? payload.tool_input : {};
+  const mapping = { ...rawMapping };
+  for (const key of ["command", "cmd", "script"]) {
+    if (typeof mapping[key] === "string") mapping[key] = stripQuotedSegments(mapping[key]);
+  }
+  if (!looksLikeWrite(tool, mapping)) return 0;
+
+  const sessionRaw = payload.session_id;
+  const session = typeof sessionRaw === "string" && sessionRaw.trim() ? sessionRaw : null;
+
+  const state = loadUntracked(repo);
+  const now = Date.now();
+  for (const [sid, bucket] of Object.entries(state.sessions)) {
+    if (!isPlainObject(bucket) || !(now - Date.parse(bucket.ts ?? "") < UNTRACKED_TTL_MS)) {
+      delete state.sessions[sid];
+    }
+  }
+  const known = new Set(session ? (state.sessions[session]?.files ?? []) : []);
+  for (const raw of writeFileTargets(tool, mapping)) {
+    const rel = repoInsideRelative(repo, raw);
+    if (rel) known.add(foldCase(rel));
+  }
+  const files = [...known].sort();
+  if (session) {
+    state.sessions[session] = { files, ts: new Date(now).toISOString() };
+    try {
+      fs.mkdirSync(path.join(repo, STATE_DIR), { recursive: true });
+      fs.writeFileSync(untrackedPath(repo), JSON.stringify(state, null, 2) + "\n", "utf8");
+    } catch {
+      /* the nudge must never break the tool call */
+    }
+  }
+
+  const openTemplate =
+    `  node "${process.argv[1] ?? "taskloop.mjs"}" open --repo "${repo}" --goal "<one line>" ` +
+    '--criterion "<executable check, red until done>" ' +
+    '--alignment "green => goal because <...>; not covered: <...>" --files "<glob>"';
+  if (session && files.length >= 2) {
+    return deny(
+      `taskloop: untracked multi-file work this session (${files.join(", ")}). ` +
+        "The lightweight default covers a single-file tweak; wider work opens a task first:\n" +
+        openTemplate,
+    );
+  }
+  process.stderr.write(
+    "taskloop: no open task — single-file so far; if this is landing wider work, open a task before the next file:\n" +
+      openTemplate +
+      "\n",
+  );
+  return 0;
+}
+
 function hookPretool(payload, repo, task) {
   const tool = String(payload.tool_name ?? "");
   const mapping = isPlainObject(payload.tool_input) ? payload.tool_input : {};
@@ -1446,7 +1591,17 @@ function main() {
   const event = String(payload.hook_event_name ?? "").toLowerCase();
   const repo = repoFromPayload(payload);
   const task = loadTask(repo);
-  if (!task || task.state !== "open") return 0; // fail-open: no task, no supervision
+  if (!task || task.state !== "open") {
+    // No task: reads and Stop stay unsupervised, but writes get the untracked
+    // nudge — single-file passes with a hint, multi-file gates on open.
+    if (event !== "pretooluse") return 0;
+    try {
+      return hookUntrackedPretool(payload, repo);
+    } catch (err) {
+      process.stderr.write(`taskloop: untracked-write nudge degraded (${err?.message ?? err}); releasing\n`);
+      return 0;
+    }
+  }
   try {
     if (event === "pretooluse") return hookPretool(payload, repo, task);
     if (event === "stop") return hookStop(payload, repo, task);
