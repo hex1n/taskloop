@@ -1,0 +1,22 @@
+{
+  "name": "@hex1n/taskloop",
+  "version": "0.1.0",
+  "description": "Task-first runtime and composable workloop core for coding agents",
+  "type": "module",
+  "bin": {
+    "taskloop": "bin/taskloop.mjs"
+  },
+  "scripts": {
+    "test": "node --test tests/taskloop.test.mjs tests/taskloop-architecture.test.mjs tests/skills.test.mjs",
+    "install:user": "node install.mjs",
+    "install:user:dry-run": "node install.mjs --dry-run"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hex1n/taskloop.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hex1n/taskloop/issues"
+  },
+  "homepage": "https://github.com/hex1n/taskloop#readme"
+}

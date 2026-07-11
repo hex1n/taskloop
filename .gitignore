@@ -1,0 +1,6 @@
+.taskloop/
+node_modules/
+coverage/
+.DS_Store
+.idea/
+__pycache__/
