@@ -7,7 +7,7 @@ import test from "node:test";
 
 import { criterionMetadata, expandWindowsGlobs, mapExecution, runCriterionSource } from "../lib/criterion.mjs";
 import { auditLedger, eventId, makeEvent, validateEvent } from "../lib/outcome-ledger.mjs";
-import { POLICY_PRESETS, assertTaskSchema, closureProjection, constructPolicy, createTask, criterionDefinitionHash, transition, validatePolicy } from "../lib/task-engine.mjs";
+import { POLICY_PRESETS, assertTaskSchema, closureProjection, constructPolicy, createTask, criterionDefinitionHash, projectProofAssurance, projectReviewRequirement, transition, validatePolicy } from "../lib/task-engine.mjs";
 import { archiveIncompatibleState, archiveTask, loadTask, saveTask } from "../lib/task-store.mjs";
 import { envelopeOverlap, siblingWorktreeOpenTasks } from "../lib/supervision.mjs";
 
@@ -45,7 +45,7 @@ function fixture(t) {
 }
 
 function open(fx, policy = "default", extra = []) {
-  return run(["open", "--repo", fx.repo, "--goal", "finish", "--criterion-file", "check.mjs", "--criterion-policy", policy, ...(policy === "default" ? [] : ["--reason", "policy reason"]), "--alignment-because", "the checker exercises the result", "--not-covered", "deployment", "--files", "work.txt", ...extra], { env: fx.env });
+  return run(["open", "--repo", fx.repo, "--goal", "finish", "--criterion-file", "check.mjs", "--criterion-policy", policy, ...(policy === "default" ? [] : ["--reason", "policy reason"]), "--alignment-because", "the checker exercises the result", "--not-covered", "deployment", "--files", "work.txt", "--risk", "routine", "--risk-reason", "isolated reversible fixture", ...extra], { env: fx.env });
 }
 
 function observation(verdict, generation = "g1", artifact = 0) {
@@ -54,8 +54,70 @@ function observation(verdict, generation = "g1", artifact = 0) {
 
 function task(overrides = {}) {
   const criterion = { source: { kind: "file", value: "check.mjs" }, protocol: "binary", timeout_seconds: 10, declared_inputs: [{ path: "check.mjs", hash: "h" }], subjects: [], criterion_definition_hash: "sha256:h", criterion_generation_id: "g1", criterion_input_fingerprint: "f", input_coverage: "full", provenance: "repo" };
-  return createTask({ taskId: "t1", goal: "g", criterion, observation: observation("unsatisfied"), policyName: "default", at: AT, alignment: { because: "b", not_covered: [] }, envelope: { files: ["**"], git: [], destructive: false, network: false }, budget: { rounds: 8 }, ...overrides });
+  return createTask({ taskId: "t1", goal: "g", criterion, observation: observation("unsatisfied"), policyName: "default", at: AT, alignment: { because: "b", not_covered: [] }, envelope: { files: ["lib/**"], git: [], destructive: false, network: false }, budget: { rounds: 8 }, assurance: { declared_risk: "routine", risk_reason: "routine reversible", risk_declared_by: "self", change_classes: ["internal"], review_policy: "risk_based", required_review_level: null, review_waiver_reason: null, review_waiver_granted_by: null, proof_gap_acceptances: [], risk_floor_events: [] }, ...overrides });
 }
+
+test("proof assurance and change review are orthogonal", () => {
+  const strongCritical = task();
+  strongCritical.assurance.declared_risk = "critical"; strongCritical.assurance.risk_reason = "public API"; strongCritical.assurance.change_classes = ["public_contract"];
+  strongCritical.criterion.last_observation = observation("satisfied");
+  assert.deepEqual(projectProofAssurance(strongCritical), { state: "adequate", reasons: [], acceptance: null });
+  assert.deepEqual(projectReviewRequirement(strongCritical), { level: "second_model", reasons: ["declared_critical", "public_contract"], accepted: false, waived: false });
+  assert.deepEqual(closureProjection(strongCritical), { state: "held", reasons: ["change_review_unaccepted"] });
+  strongCritical.reviews.push({ criterion_generation_id: "g1", reviewed_task_revision: strongCritical.last_substantive_task_revision, reviewed_artifact_revision: 0, level: "fresh_context", blocking_findings_count: 0 });
+  assert.equal(projectReviewRequirement(strongCritical).accepted, false);
+  strongCritical.reviews.push({ criterion_generation_id: "g1", reviewed_task_revision: strongCritical.last_substantive_task_revision, reviewed_artifact_revision: 0, level: "second_model", blocking_findings_count: 0 });
+  assert.deepEqual(closureProjection(strongCritical), { state: "eligible" });
+
+  const weakRoutine = task(); weakRoutine.criterion.provenance = "unresolved"; weakRoutine.criterion.input_coverage = "unknown"; weakRoutine.criterion.last_observation = observation("satisfied");
+  assert.deepEqual(closureProjection(weakRoutine), { state: "held", reasons: ["criterion_assurance_gap"] });
+  weakRoutine.reviews.push({ criterion_generation_id: "g1", reviewed_task_revision: weakRoutine.last_substantive_task_revision, reviewed_artifact_revision: 0, level: "second_model", blocking_findings_count: 0 });
+  assert.deepEqual(closureProjection(weakRoutine), { state: "held", reasons: ["criterion_assurance_gap"] });
+});
+
+test("risk floors only raise risk and waiver and proof acceptance remain auditable", () => {
+  const destructive = task(); destructive.grants.push({ kind: "destructive" });
+  assert.equal(projectReviewRequirement(destructive).level, "second_model");
+  const substantial = task(); substantial.assurance.declared_risk = "substantial";
+  assert.equal(projectReviewRequirement(substantial).level, "fresh_context");
+  substantial.assurance.review_policy = "waived"; substantial.assurance.review_waiver_reason = "user accepts";
+  assert.deepEqual(projectReviewRequirement(substantial), { level: null, reasons: ["review_waived"], accepted: true, waived: true });
+  const weak = task(); weak.criterion.provenance = "state_dir"; weak.assurance.proof_gap_acceptances.push({ criterion_generation_id: "g1", reason: "accepted", granted_by: "user" });
+  assert.equal(projectProofAssurance(weak).state, "provisional");
+});
+
+test("assurance truth table covers policies, floors, freshness and lifecycle boundaries", () => {
+  for (const [risk, level] of [["routine", null], ["substantial", "fresh_context"], ["critical", "second_model"]]) {
+    const value = task(); value.assurance.declared_risk = risk; value.assurance.risk_reason = risk === "substantial" ? "" : risk;
+    assert.equal(projectReviewRequirement(value).level, level);
+  }
+  const required = task(); required.assurance.review_policy = "required"; required.assurance.required_review_level = "second_model";
+  assert.equal(projectReviewRequirement(required).level, "second_model");
+  const publicContract = task(); publicContract.assurance.change_classes = ["public_contract"];
+  assert.equal(projectReviewRequirement(publicContract).level, "second_model");
+  const reviewed = task(); reviewed.assurance.declared_risk = "substantial"; reviewed.criterion.last_observation = observation("satisfied");
+  reviewed.reviews.push({ criterion_generation_id: "g1", reviewed_task_revision: reviewed.last_substantive_task_revision, reviewed_artifact_revision: 0, level: "fresh_context", blocking_findings_count: 0 });
+  assert.equal(projectReviewRequirement(reviewed).accepted, true);
+  const changed = transition(reviewed, { type: "record-write", files: ["lib/x"], at: AT }).task;
+  assert.equal(projectReviewRequirement(changed).accepted, false);
+  const escalatedAssurance = structuredClone(reviewed.assurance); escalatedAssurance.declared_risk = "critical"; escalatedAssurance.risk_reason = "escalated";
+  const escalated = transition(reviewed, { type: "amend", assurance: escalatedAssurance, reason: "risk found", at: AT }).task;
+  assert.equal(projectReviewRequirement(escalated).level, "second_model"); assert.equal(projectReviewRequirement(escalated).accepted, false);
+  for (const changedField of [{ alignment: { because: "new", not_covered: [] } }, { envelope: { files: ["lib/**", "tests/**"], git: [], destructive: false, network: false } }, { grants: [{ grant_id: "g", kind: "network", scope: ["commands"], reason: "x", granted_by: "user", granted_at_task_revision: 2 }] }]) {
+    const amended = transition(reviewed, { type: "amend", ...changedField, reason: "scope changed", at: AT }).task;
+    assert.equal(projectReviewRequirement(amended).accepted, false);
+  }
+  const suspendedBase = task(); suspendedBase.assurance.declared_risk = "substantial";
+  const suspended = transition(suspendedBase, { type: "suspend", reason: "needs_input", judgment: { remaining: "r", failure: "f", next_action: "n" }, at: AT }).task;
+  assert.equal(closureProjection(suspended), null); assert.deepEqual(projectReviewRequirement(suspended), { level: null, reasons: ["lifecycle_not_active"], accepted: true, waived: false, applicable: false });
+  const terminal = transition(task(), { type: "abandon", reason: "stop", at: AT }).task;
+  assert.equal(closureProjection(terminal), null);
+  const drifted = task(); drifted.criterion.last_observation = observation("satisfied");
+  drifted.assurance.proof_gap_acceptances.push({ criterion_generation_id: "g1", reason: "older acceptance", granted_by: "user" });
+  assert.deepEqual(projectProofAssurance(drifted, { drift: true }), { state: "gap", reasons: ["criterion_input_drift"], acceptance: null });
+  assert.deepEqual(closureProjection(drifted, { drift: true }), { state: "held", reasons: ["sensor_drift", "criterion_assurance_gap", "change_review_unaccepted"] });
+  assert.deepEqual(projectReviewRequirement(terminal), { level: null, reasons: ["lifecycle_not_active"], accepted: true, waived: false, applicable: false });
+});
 
 test("policy constructor accepts exactly the three named tuples", () => {
   assert.deepEqual(Object.keys(POLICY_PRESETS), ["default", "deferred_witness", "steady_satisfied"]);
@@ -100,26 +162,27 @@ test("closure projects unobserved, unsatisfied, indeterminate, drift and suspend
   base.criterion.last_observation = observation("indeterminate");
   assert.deepEqual(closureProjection(base), { state: "not_ready", reason: "criterion_indeterminate" });
   base.criterion.last_observation = observation("satisfied");
-  assert.deepEqual(closureProjection(base, { drift: true }), { state: "held", reasons: ["sensor_drift"] });
+  assert.deepEqual(closureProjection(base, { drift: true }), { state: "held", reasons: ["sensor_drift", "criterion_assurance_gap"] });
   base.lifecycle = { state: "suspended", reason: "stuck", suspended_at: AT, judgment: { remaining: "r", failure: "f", next_action: "n" } };
   assert.equal(closureProjection(base), null);
 });
 
-test("weak sensor requires a fresh accepted independent review or provisional", () => {
+test("proof gap requires explicit acceptance and review cannot remove it", () => {
   const weak = task(); weak.criterion.input_coverage = "unknown"; weak.criterion.provenance = "unresolved"; weak.criterion.last_observation = observation("satisfied");
-  assert.deepEqual(closureProjection(weak), { state: "held", reasons: ["weak_sensor_unreviewed"] });
+  assert.deepEqual(closureProjection(weak), { state: "held", reasons: ["criterion_assurance_gap"] });
   weak.reviews.push({ criterion_generation_id: "g1", reviewed_task_revision: weak.last_substantive_task_revision, reviewed_artifact_revision: 0, level: "fresh_context", blocking_findings_count: 0 });
+  assert.deepEqual(closureProjection(weak), { state: "held", reasons: ["criterion_assurance_gap"] });
+  weak.assurance.proof_gap_acceptances.push({ criterion_generation_id: "g1", reason: "accepted", granted_by: "user" });
   assert.deepEqual(closureProjection(weak), { state: "eligible" });
-  assert.deepEqual(closureProjection({ ...weak, reviews: [] }, { provisional: true }), { state: "eligible" });
 });
 
 test("review freshness expires after writes and substantive amendments", () => {
-  let value = task(); value.criterion.input_coverage = "unknown"; value.criterion.provenance = "unresolved"; value.criterion.last_observation = observation("satisfied");
+  let value = task(); value.assurance.declared_risk = "substantial"; value.criterion.last_observation = observation("satisfied");
   const record = { review_id: "r", criterion_generation_id: "g1", reviewed_task_revision: value.last_substantive_task_revision, reviewed_artifact_revision: 0, level: "second_model", reviewer: "other", blocking_findings_count: 0, advisory_findings_count: 1, reviewed_at: AT };
   value = transition(value, { type: "review", record, at: AT }).task;
   assert.equal(closureProjection(value).state, "eligible");
   value = transition(value, { type: "record-write", files: ["x"], at: AT }).task;
-  assert.deepEqual(closureProjection(value).reasons, ["weak_sensor_unreviewed"]);
+  assert.deepEqual(closureProjection(value).reasons, ["change_review_unaccepted"]);
   value = transition(value, { type: "amend", goal: "new", reason: "pivot", at: AT }).task;
   assert.equal(value.last_substantive_task_revision, value.task_revision);
 });
@@ -206,7 +269,7 @@ test("state-directory criterion files are weak sensors, not repository provenanc
   const opened = run(["open", "--repo", fx.repo, "--goal", "guard", "--criterion-file", ".taskloop/check.mjs", "--criterion-policy", "steady-satisfied", "--reason", "guard", "--alignment-because", "probe", "--files", "work.txt"], { env: fx.env });
   assert.equal(opened.status, 0, opened.stderr);
   const achieved = run(["achieve", "--repo", fx.repo], { env: fx.env });
-  assert.equal(achieved.status, 2); assert.match(achieved.stderr, /weak_sensor_unreviewed/);
+  assert.equal(achieved.status, 2); assert.match(achieved.stderr, /criterion_assurance_gap/);
 });
 
 test("Windows command preparation expands repository globs without a shell wildcard dependency", (t) => {
@@ -225,8 +288,8 @@ test("criterion side effects become indeterminate", (t) => {
   assert.deepEqual(seen.changed_paths, ["mutated"]);
 });
 
-test("schema v1 rejects every other task shape", () => {
-  assert.equal(assertTaskSchema(task()).schema_version, 1);
+test("schema v2 rejects every other task shape", () => {
+  assert.equal(assertTaskSchema(task()).schema_version, 2);
   assert.throws(() => assertTaskSchema({ version: 1, state: "open" }), /incompatible task schema/);
 });
 
@@ -241,14 +304,14 @@ test("incompatible state archival preserves bytes and records a receipt", (t) =>
 
 test("ledger events use deterministic ids and audit gaps/duplicates/corruption", (t) => {
   const fx = fixture(t); const value = task();
-  const payload = { goal: value.goal, policy: value.policy, policy_rationale: null, criterion: {}, alignment: value.alignment, envelope: value.envelope, budget: value.budget };
+  const payload = { goal: value.goal, policy: value.policy, policy_rationale: null, criterion: {}, alignment: value.alignment, envelope: value.envelope, assurance: value.assurance, budget: value.budget };
   const row = makeEvent({ task: value, kind: "task_opened", payload, repoIdentity: "sha256:r", at: AT });
   assert.equal(row.event_id, eventId(value.task_id, value.task_revision, "task_opened"));
   assert.match(row.event_id, /^[0-9a-f]{8}-[0-9a-f]{4}-5[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
   assert.equal(validateEvent(row), null);
   assert.match(validateEvent({ ...row, payload: { ...payload, surprise: true } }), /unknown payload field/);
   const dir = path.join(fx.home, ".taskloop"); fs.mkdirSync(dir, { recursive: true });
-  fs.writeFileSync(path.join(dir, "outcomes-v1.jsonl"), JSON.stringify(row) + "\n" + JSON.stringify(row) + "\n{bad\n");
+  fs.writeFileSync(path.join(dir, "outcomes-v2.jsonl"), JSON.stringify(row) + "\n" + JSON.stringify(row) + "\n{bad\n");
   const oldHome = process.env.HOME; process.env.HOME = fx.home;
   try { const report = auditLedger(); assert.equal(report.exit, 2); assert.equal(report.warnings.length, 1); assert.equal(report.corruptions.length, 1); } finally { process.env.HOME = oldHome; }
 });
@@ -277,9 +340,9 @@ test("CLI steady-satisfied Stop never auto closes and achieve does", (t) => {
   assert.equal(run(["achieve", "--repo", fx.repo], { env: fx.env }).status, 0);
 });
 
-test("CLI public vocabulary is clean break and info is contract 2", () => {
-  const help = run(["help"]); assert.equal(help.status, 0); assert.doesNotMatch(help.stdout, /earn-red|keep-green|\bdone\b|\bred\b|\bgreen\b/);
-  const info = JSON.parse(run(["info"]).stdout); assert.equal(info.runtime_contract, 2); assert.equal(info.task_schema_version, 1); assert.equal(info.ledger_event_schema_version, 1); assert.match(info.ledger_path, /outcomes-v1\.jsonl$/);
+test("CLI public vocabulary is clean break and info is contract 3", () => {
+  const help = run(["help"]); assert.equal(help.status, 0); assert.doesNotMatch(help.stdout, /earn-red|keep-green|\bdone\b|\bred\b|\bgreen\b|--provisional|weak_sensor_unreviewed/);
+  const info = JSON.parse(run(["info"]).stdout); assert.equal(info.runtime_contract, 3); assert.equal(info.task_schema_version, 2); assert.equal(info.ledger_event_schema_version, 2); assert.match(info.ledger_path, /outcomes-v2\.jsonl$/);
   assert.notEqual(run(["open", "--earn-red"]).status, 0); assert.notEqual(run(["done"]).status, 0);
 });
 
@@ -288,6 +351,51 @@ test("CLI review maps kebab enums and enforces finding counts", (t) => {
   const reviewed = run(["review", "--repo", fx.repo, "--level", "fresh-context", "--reviewer", "peer", "--blocking-findings", "0", "--advisory-findings", "2"], { env: fx.env });
   assert.equal(reviewed.status, 0, reviewed.stderr); assert.equal(loadTask(fx.repo).reviews.at(-1).level, "fresh_context");
   assert.notEqual(run(["review", "--repo", fx.repo, "--level", "fresh-context", "--reviewer", "peer", "--blocking-findings", "-1", "--advisory-findings", "0"], { env: fx.env }).status, 0);
+});
+
+test("CLI critical strong criterion requires a current second-model review", (t) => {
+  const fx = fixture(t); fs.writeFileSync(path.join(fx.repo, "done"), "yes\n");
+  const opened = run(["open", "--repo", fx.repo, "--goal", "critical contract", "--criterion-file", "check.mjs", "--criterion-policy", "steady-satisfied", "--reason", "guard", "--alignment-because", "probe", "--files", "work.txt", "--risk", "critical", "--risk-reason", "public API", "--change-class", "public-contract"], { env: fx.env });
+  assert.equal(opened.status, 0, opened.stderr);
+  let status = JSON.parse(run(["status", "--repo", fx.repo], { env: fx.env }).stdout);
+  assert.equal(status.assurance.risk_declared_by, "self");
+  assert.equal(status.proof_assurance.state, "adequate"); assert.equal(status.review_requirement.level, "second_model"); assert.equal(status.closure.reasons[0], "change_review_unaccepted");
+  assert.equal(run(["review", "--repo", fx.repo, "--level", "fresh-context", "--reviewer", "peer", "--blocking-findings", "0", "--advisory-findings", "0"], { env: fx.env }).status, 0);
+  assert.match(run(["achieve", "--repo", fx.repo], { env: fx.env }).stderr, /change_review_unaccepted/);
+  assert.equal(run(["review", "--repo", fx.repo, "--level", "second-model", "--reviewer", "other-model", "--blocking-findings", "0", "--advisory-findings", "1"], { env: fx.env }).status, 0);
+  const achieved = run(["achieve", "--repo", fx.repo], { env: fx.env }); assert.equal(achieved.status, 0); assert.match(achieved.stdout, /advisory findings: 1/);
+});
+
+test("CLI proof acceptance, waiver, defaults and grant floors stay independent", (t) => {
+  const weak = fixture(t); fs.mkdirSync(path.join(weak.repo, ".taskloop"), { recursive: true }); fs.writeFileSync(path.join(weak.repo, ".taskloop", "weak.mjs"), "process.exit(0);\n");
+  let result = run(["open", "--repo", weak.repo, "--goal", "weak routine", "--criterion-file", ".taskloop/weak.mjs", "--criterion-policy", "steady-satisfied", "--reason", "guard", "--alignment-because", "probe", "--files", "work.txt", "--risk", "routine", "--risk-reason", "small reversible"], { env: weak.env });
+  assert.equal(result.status, 0, result.stderr); assert.match(run(["achieve", "--repo", weak.repo], { env: weak.env }).stderr, /criterion_assurance_gap/);
+  assert.equal(run(["accept-proof-gap", "--repo", weak.repo, "--reason", "external guard accepted", "--granted-by", "user"], { env: weak.env }).status, 0);
+  assert.match(run(["achieve", "--repo", weak.repo], { env: weak.env }).stderr, /change_review_unaccepted/);
+  assert.equal(run(["review", "--repo", weak.repo, "--level", "fresh-context", "--reviewer", "peer", "--blocking-findings", "0", "--advisory-findings", "0"], { env: weak.env }).status, 0);
+  assert.equal(run(["achieve", "--repo", weak.repo], { env: weak.env }).status, 0);
+
+  const defaultRisk = fixture(t); assert.equal(run(["open", "--repo", defaultRisk.repo, "--goal", "default risk", "--criterion-file", "check.mjs", "--criterion-policy", "default", "--alignment-because", "probe", "--files", "work.txt"], { env: defaultRisk.env }).status, 0);
+  assert.equal(JSON.parse(run(["status", "--repo", defaultRisk.repo], { env: defaultRisk.env }).stdout).review_requirement.level, "fresh_context");
+
+  const waived = fixture(t); fs.writeFileSync(path.join(waived.repo, "done"), "yes\n");
+  result = run(["open", "--repo", waived.repo, "--goal", "waived", "--criterion-file", "check.mjs", "--criterion-policy", "steady-satisfied", "--reason", "guard", "--alignment-because", "probe", "--files", "work.txt", "--review-policy", "waived", "--review-waiver-reason", "user accepts review cost"], { env: waived.env });
+  assert.equal(result.status, 0, result.stderr); const waivedClose = run(["achieve", "--repo", waived.repo], { env: waived.env }); assert.equal(waivedClose.status, 0); assert.match(waivedClose.stdout, /review waived: user accepts review cost \(self\)/);
+  const waiverEvents = fs.readFileSync(path.join(waived.home, ".taskloop", "outcomes-v2.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+  const waiverAssurance = waiverEvents.at(-1).payload.assurance;
+  assert.equal(waiverAssurance.review_waiver_reason, "user accepts review cost"); assert.equal(waiverAssurance.review_waiver_granted_by, "self");
+
+  const floor = fixture(t);
+  result = open(floor, "default", ["--destructive-allowed", "--reason", "dangerous operation"]); assert.equal(result.status, 0, result.stderr);
+  assert.equal(JSON.parse(run(["status", "--repo", floor.repo], { env: floor.env }).stdout).review_requirement.level, "second_model");
+});
+
+test("automatic Stop echoes accepted review advisories on stderr without changing release stdout", (t) => {
+  const fx = fixture(t); assert.equal(open(fx, "default", ["--review-policy", "required", "--required-review-level", "fresh-context"]).status, 0);
+  assert.equal(run(["review", "--repo", fx.repo, "--level", "fresh-context", "--reviewer", "peer", "--blocking-findings", "0", "--advisory-findings", "2"], { env: fx.env }).status, 0);
+  fs.writeFileSync(path.join(fx.repo, "done"), "yes\n");
+  const stopped = run([], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo }) });
+  assert.equal(stopped.stdout, ""); assert.match(stopped.stderr, /terminal\(achieved\).*advisory findings: 2/);
 });
 
 test("hook contract is byte-exact for deny, block, and release", (t) => {

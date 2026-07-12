@@ -17,8 +17,8 @@ test("public docs and skills use the canonical observation/lifecycle/policy voca
   const joined = files.map((rel) => fs.readFileSync(path.join(ROOT, rel), "utf8")).join("\n");
   for (const token of ["unsatisfied", "satisfied", "indeterminate", "active", "suspended", "terminal", "deferred_witness", "steady_satisfied", "criterion_generation_id"]) assert.match(joined, new RegExp(token));
   assert.doesNotMatch(joined, /--earn-red|--keep-green|\bearn_red\b|\bred_witnessed\b|\bkeep_green\b|\bstate: done\b/);
-  assert.match(joined, /~\/\.taskloop\/outcomes-v1\.jsonl/);
-  assert.doesNotMatch(joined, /~\/\.taskloop\/outcomes\.jsonl/);
+  assert.match(joined, /~\/\.taskloop\/outcomes-v2\.jsonl/);
+  assert.doesNotMatch(joined, /~\/\.taskloop\/outcomes(?:-v1)?\.jsonl/);
 });
 
 test("workloop remains task-facing and delegates shared semantics to loop-core", () => {
@@ -43,7 +43,7 @@ test("release sources contain no removed public-domain vocabulary", () => {
   const offenders = [];
   for (const file of releaseFiles) {
     const body = fs.readFileSync(file, "utf8");
-    if (/--earn-red|--keep-green|\bearn_red\b|\bred_witnessed\b|\bkeep_green\b|\bstate: done\b/.test(body)) offenders.push(path.relative(ROOT, file));
+    if (/--earn-red|--keep-green|\bearn_red\b|\bred_witnessed\b|\bkeep_green\b|\bstate: done\b|weak_sensor_unreviewed|--provisional|outcomes-v1\.jsonl/.test(body)) offenders.push(path.relative(ROOT, file));
   }
   assert.deepEqual(offenders, []);
 });

@@ -743,7 +743,7 @@ export function installTaskloop(repo, home, dry = false) {
     const journalRow = {
       journal_version: 1,
       release_id: releaseId,
-      runtime_contract: 2,
+      runtime_contract: 3,
       status: "activating",
       steps: { runtime_staged: true, skills_activated: false, shim_activated: false, manifest_committed: false },
     };
@@ -767,7 +767,7 @@ export function installTaskloop(repo, home, dry = false) {
     const manifestRow = {
       release_manifest_version: 1,
       release_id: releaseId,
-      runtime_contract: 2,
+      runtime_contract: 3,
       runtime_digest: runtime.hash,
       managed_skills_manifest_digest: dry || !exists(skillManifest) ? null : createHash("sha256").update(fs.readFileSync(skillManifest)).digest("hex"),
     };

@@ -14,8 +14,8 @@ The criterion has exactly three observations:
 - `indeterminate`: the runtime cannot adjudicate it.
 
 Criterion satisfied is not task achieved. A fresh satisfied observation may
-still be held by drift, a missing unsatisfied witness, or an unreviewed weak
-sensor. Command exit codes are mapped at the execution boundary; tri-state
+still be held by drift, a missing unsatisfied witness, a criterion assurance
+gap, or an unaccepted change review. Command exit codes are mapped at the execution boundary; tri-state
 adapters follow [ADAPTERS.md](ADAPTERS.md).
 
 Every criterion definition has a stable `criterion_definition_hash` and a
@@ -43,7 +43,7 @@ Closure is derived only for active tasks:
 
 ```text
 not_ready(criterion_unobserved | criterion_unsatisfied | criterion_indeterminate)
-held(sensor_drift | unsatisfied_not_witnessed | weak_sensor_unreviewed)
+held(sensor_drift | unsatisfied_not_witnessed | criterion_assurance_gap | change_review_unaccepted)
 eligible
 ```
 
@@ -63,7 +63,7 @@ The CLI accepts three named policies and persists only their tuple:
 | `deferred-witness` | `deferred_witness` | determinate | required | automatic |
 | `steady-satisfied` | `steady_satisfied` | determinate | none | explicit |
 
-No other tuple is valid in schema v1. Non-default policies require a rationale.
+No other tuple is valid in schema v2. Non-default policies require a rationale.
 Default open takes its unsatisfied witness immediately. Deferred witness can
 open satisfied, but closure remains held until a metered Stop or `achieve`
 observes unsatisfied. Diagnostic `verify` never records an observation,
@@ -77,7 +77,10 @@ node ~/bin/taskloop.mjs open --repo <repo> --goal "<outcome>" \
   --criterion-policy default \
   --alignment-because "<what the check exercises>" \
   --not-covered "<gap>" \
-  --files "<glob>"
+  --files "<glob>" \
+  --risk routine|substantial|critical --risk-reason "<why>" \
+  --change-class internal|public-contract|schema|security|permissions|migration \
+  --review-policy risk-based|required|waived
 ```
 
 Use `deferred-witness --reason` when the failing check still needs to be
@@ -89,15 +92,31 @@ The envelope authorizes writes; it does not exempt proof inputs. Exact
 both criterion inputs and intended work. They must remain inside the envelope
 and cannot name the criterion file itself.
 
-## Review acceptance
+## Assurance and review acceptance
 
-Weak sensors are those outside the repository or without full declared-input
-coverage. They require a review at `fresh_context` or `second_model`, bound to
-the current `criterion_generation_id`, last substantive task revision and
-artifact revision, with zero blocking findings. `self_reread` is telemetry only.
-Every write-shaped call and every substantive amendment expires the review.
-`achieve --provisional` may bypass only `weak_sensor_unreviewed`, never drift or
-a missing witness.
+Proof assurance and change assurance are orthogonal. A criterion outside the
+repository or without full declared-input coverage produces
+`criterion_assurance_gap`. A review never removes that hold. Strengthen the
+criterion, or explicitly record the downgrade with `accept-proof-gap --reason
+... --granted-by user|self`; the latter makes proof provisional and raises the
+machine risk floor to substantial.
+
+Tasks declare `routine`, `substantial`, or `critical` risk. The default is
+substantial. Under `risk-based`, routine needs no review, substantial requires
+fresh-context, and critical requires second-model. `required` names an explicit
+minimum level; `waived` requires a reason and remains visible in the ledger.
+Machine facts only raise risk: destructive/whole-repository authority and
+public-contract/schema/security/permissions/migration classes are critical;
+network/install/git/trust changes, criterion/policy amendments, proof
+acceptance, multiple roots, and broad touched-file sets are at least
+substantial.
+
+An accepted review is bound to the current `criterion_generation_id`, last
+substantive task revision, and artifact revision, with zero blocking findings
+and at least the requested level. `self_reread` is telemetry only. Every write
+and substantive amendment expires review acceptance. Runtime status exposes
+`proof_assurance`, `machine_risk_floor`, and `review_requirement`; the runtime
+never launches a reviewer.
 
 ```text
 taskloop review --level second-model --reviewer <id> \
@@ -118,16 +137,16 @@ one file disappeared is not sufficient.
 
 ## State, ledger, and upgrade
 
-`task.json` accepts only `schema_version: 1`. Incompatible state is never
+`task.json` accepts only `schema_version: 2`. Incompatible state is never
 interpreted or migrated. Preserve it byte-for-byte with explicit authorization:
 
 ```text
 taskloop archive-incompatible-state --repo <repo> \
-  --reason "upgrade to schema v1" --granted-by user
+  --reason "upgrade to schema v2" --granted-by user
 ```
 
-The runtime writes only `~/.taskloop/outcomes-v1.jsonl`. Ledger events use
-`event_schema_version: 1`; task adjudication never reads the ledger. Appends are
+The runtime writes only `~/.taskloop/outcomes-v2.jsonl`. Ledger events use
+`event_schema_version: 2`; task adjudication never reads the ledger. Appends are
 best-effort and report task id, revision, and allocated sequence on failure.
 `audit` reports gaps as incomplete telemetry and isolates corrupt rows.
 

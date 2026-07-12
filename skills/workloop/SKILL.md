@@ -38,9 +38,13 @@ after each meaningful write. Criterion unsatisfied guides the next round;
 criterion indeterminate means repair evidence or environment, not product work.
 Never weaken or mutate the criterion to obtain satisfied.
 
-For a weak sensor, obtain a fresh independent review after the last substantive
-write. Record reviewer identity and blocking/advisory finding counts; feed all
-blocking findings back into the loop and review again.
+Read `status` after the last substantive write. A `criterion_assurance_gap`
+requires a stronger criterion or an explicit `accept-proof-gap`; reviewer prose
+cannot repair machine proof. When `review_requirement.level` is non-null and
+not accepted, ask a reviewer at least that independent (`fresh_context` or
+`second_model`), feed blocking findings back into the loop, then record the
+current generation/revisions and blocking/advisory counts with `review`.
+taskloop only emits the requirement; reviewer scheduling belongs to the host.
 
 ## 4. Close without drift
 

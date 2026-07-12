@@ -60,17 +60,25 @@ taskloop not-needed --evidence "read-only probe showed the goal already holds"
 taskloop abandon --reason "superseded"
 ```
 
-Weak sensors require an accepted independent review on the current
-`criterion_generation_id` and artifact revision:
+Proof assurance and change assurance are separate. Weak criterion inputs cause
+`criterion_assurance_gap`; strengthen the criterion or explicitly record a
+proof downgrade with `accept-proof-gap`. Change review is driven by declared
+risk plus machine floors:
 
 ```sh
 taskloop review --level fresh-context --reviewer peer \
   --blocking-findings 0 --advisory-findings 0
 ```
 
-`task.json` is schema v1 only. Archive an incompatible task without interpreting
+`routine` risk needs no review by default, `substantial` requires
+fresh-context, and `critical` requires second-model. Use `--review-policy
+required|waived` for an explicit override; every waiver requires a reason and is
+audited. `status` reports `proof_assurance`, `machine_risk_floor`, and
+`review_requirement` without launching a reviewer.
+
+`task.json` is schema v2 only. Archive an incompatible task without interpreting
 it using `archive-incompatible-state --reason ... --granted-by user`, then open
-a new task. The new runtime writes only `~/.taskloop/outcomes-v1.jsonl`.
+a new task. The new runtime writes only `~/.taskloop/outcomes-v2.jsonl`.
 
 ## Install and verify
 
