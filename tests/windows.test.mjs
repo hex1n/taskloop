@@ -139,7 +139,7 @@ test("Windows criterion timeout terminates the child and returns promptly", { sk
   const started = Date.now();
   const opened = runNode(fixture.shim, ["open", "--repo", repo, "--goal", "timeout", "--criterion-file", "slow.mjs", "--criterion-policy", "default", "--criterion-timeout-seconds", "1", "--alignment-because", "the checker exercises timeout handling", "--files", "work.txt", "--risk", "routine", "--risk-reason", "isolated fixture"], { cwd: repo, env: fixture.env, timeout: 10_000 });
   assert.equal(opened.status, 2, opened.stderr || opened.stdout);
-  assert.match(opened.stderr, /criterion must be unsatisfied to open|timed out|timeout/i);
+  assert.match(opened.stderr, /criterion indeterminate; task not opened/i);
   assert.ok(Date.now() - started < 10_000, `timeout took ${Date.now() - started}ms`);
   const childPid = Number(fs.readFileSync(pidFile, "utf8"));
   assert.throws(() => process.kill(childPid, 0), (error) => error?.code === "ESRCH", `criterion child ${childPid} is still alive`);
