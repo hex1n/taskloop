@@ -58,9 +58,21 @@ jobs:
       - name: Portable skills
         timeout-minutes: 2
         run: npm run test:skills
-      - name: Windows environment
-        timeout-minutes: 5
-        run: npm run test:windows
+      - name: Windows install and shell resolution
+        timeout-minutes: 3
+        run: node --test --test-name-pattern="Windows install is repeatable" tests/windows.test.mjs
+      - name: Windows hook protocol
+        timeout-minutes: 3
+        run: node --test --test-name-pattern="Windows generated hook command" tests/windows.test.mjs
+      - name: Windows paths and state replacement
+        timeout-minutes: 3
+        run: node --test --test-name-pattern="Windows repeatedly replaces task state" tests/windows.test.mjs
+      - name: Windows child termination
+        timeout-minutes: 3
+        run: node --test --test-name-pattern="Windows criterion timeout" tests/windows.test.mjs
+      - name: Windows stale installer lock
+        timeout-minutes: 3
+        run: node --test --test-name-pattern="Windows installer reaps a stale lock" tests/windows.test.mjs
       - name: Architecture
         timeout-minutes: 3
         run: npm run test:architecture
