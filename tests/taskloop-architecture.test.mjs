@@ -4,6 +4,7 @@ import os from "node:os";
 import path from "node:path";
 import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
+import { pathToFileURL } from "node:url";
 
 import { transition } from "../lib/task-engine.mjs";
 import { withTaskLock } from "../lib/task-store.mjs";
@@ -52,13 +53,18 @@ test("task-engine transitions are pure", () => {
 
 test("task lock serializes concurrent updates and fails closed on timeout", async (t) => {
   const repo = fs.mkdtempSync(path.join(os.tmpdir(), "taskloop-lock-v1-")); t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
-  let release; const held = new Promise((resolve) => { release = resolve; });
   const helper = path.join(repo, "holder.mjs");
-  fs.writeFileSync(helper, `import {withTaskLock} from ${JSON.stringify(path.join(ROOT, "lib", "task-store.mjs"))}; withTaskLock(${JSON.stringify(repo)},()=>{process.stdout.write('held\\n');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,500)});`);
+  const taskStoreUrl = pathToFileURL(path.join(ROOT, "lib", "task-store.mjs")).href;
+  fs.writeFileSync(helper, `import {withTaskLock} from ${JSON.stringify(taskStoreUrl)}; withTaskLock(${JSON.stringify(repo)},()=>{process.stdout.write('held\\n');Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,500)});`);
   const child = spawn(process.execPath, [helper], { stdio: ["ignore", "pipe", "pipe"] });
-  await new Promise((resolve) => child.stdout.once("data", resolve));
+  let childStderr = ""; child.stderr.on("data", (chunk) => { childStderr += chunk; });
+  await new Promise((resolve, reject) => {
+    child.stdout.once("data", resolve);
+    child.once("error", reject);
+    child.once("close", (code) => reject(new Error(`lock holder exited before readiness (${code}): ${childStderr}`)));
+  });
   assert.throws(() => withTaskLock(repo, () => assert.fail("must not run"), { timeoutMs: 20 }), /lock unavailable/);
-  await new Promise((resolve) => child.once("close", resolve)); release();
+  await new Promise((resolve) => child.once("close", resolve));
 });
 
 test("PreToolUse lock timeout denies the write instead of preserving stale proof", (t) => {
