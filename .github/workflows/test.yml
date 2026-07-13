@@ -61,9 +61,15 @@ jobs:
       - name: Windows install and shell resolution
         timeout-minutes: 3
         run: node --test --test-name-pattern="Windows install is repeatable" tests/windows.test.mjs
-      - name: Windows hook protocol
+      - name: Windows hook protocol (cmd)
         timeout-minutes: 3
-        run: node --test --test-name-pattern="Windows generated hook command" tests/windows.test.mjs
+        run: node --test --test-name-pattern="Windows generated hook command.*cmd$" tests/windows.test.mjs
+      - name: Windows hook protocol (Windows PowerShell)
+        timeout-minutes: 3
+        run: node --test --test-name-pattern="Windows generated hook command.*Windows PowerShell$" tests/windows.test.mjs
+      - name: Windows hook protocol (PowerShell Core)
+        timeout-minutes: 3
+        run: node --test --test-name-pattern="Windows generated hook command.*PowerShell Core$" tests/windows.test.mjs
       - name: Windows paths and state replacement
         timeout-minutes: 3
         run: node --test --test-name-pattern="Windows repeatedly replaces task state" tests/windows.test.mjs

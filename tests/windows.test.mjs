@@ -77,28 +77,30 @@ test("Windows install is repeatable and exposes taskloop to cmd and both PowerSh
   }
 });
 
-test("Windows generated hook command carries a real PreToolUse payload through cmd and PowerShell", { skip: !WINDOWS }, (t) => {
-  const fixture = installedFixture(t);
-  const hooks = parsed(runNode(fixture.shim, ["hooks"], { env: fixture.env }), "hooks");
-  const command = hooks.hooks.PreToolUse[0].hooks[0].command;
-  const payload = JSON.stringify({
-    hook_event_name: "PreToolUse",
-    cwd: fixture.root,
-    session_id: "windows-session",
-    tool_name: "PowerShell",
-    tool_input: { command: `node ${JSON.stringify(fixture.shim)} status` },
-  });
-  const shells = [
-    [process.env.ComSpec ?? "cmd.exe", ["/d", "/s", "/c", command], "cmd hook command"],
-    ["powershell.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], "Windows PowerShell hook command"],
-    ["pwsh.exe", ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command], "PowerShell Core hook command"],
-  ];
-  for (const [executable, args, label] of shells) {
+const hookShells = [
+  ["cmd", process.env.ComSpec ?? "cmd.exe", (command) => ["/d", "/s", "/c", command]],
+  ["Windows PowerShell", "powershell.exe", (command) => ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]],
+  ["PowerShell Core", "pwsh.exe", (command) => ["-NoLogo", "-NoProfile", "-NonInteractive", "-Command", command]],
+];
+
+for (const [label, executable, argsFor] of hookShells) {
+  test(`Windows generated hook command carries a real PreToolUse payload through ${label}`, { skip: !WINDOWS }, (t) => {
+    const fixture = installedFixture(t);
+    const hooks = parsed(runNode(fixture.shim, ["hooks"], { env: fixture.env }), "hooks");
+    const command = hooks.hooks.PreToolUse[0].hooks[0].command;
+    const payload = JSON.stringify({
+      hook_event_name: "PreToolUse",
+      cwd: fixture.root,
+      session_id: "windows-session",
+      tool_name: "PowerShell",
+      tool_input: { command: `node ${JSON.stringify(fixture.shim)} status` },
+    });
+    const args = argsFor(command);
     const response = parsed(spawnSync(executable, args, { env: fixture.env, input: payload, encoding: "utf8", timeout: 30_000 }), label);
     assert.equal(response.hookSpecificOutput.permissionDecision, "allow", label);
     assert.match(response.hookSpecificOutput.updatedInput.command, /^\$env:TASKLOOP_SESSION_ID='windows-session'; /, label);
-  }
-});
+  });
+}
 
 test("Windows repeatedly replaces task state across drive-case and Unicode path variants", { skip: !WINDOWS }, (t) => {
   const fixture = installedFixture(t);
