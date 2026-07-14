@@ -6,7 +6,7 @@
 |---|---:|
 | Passed | 2 |
 | Failed | 0 |
-| Blocked | 2 |
+| Blocked | 3 |
 | Skipped | 0 |
 
 首个精确候选提交 `118cf8943c647703cb366407cc048b1ebd156792` 已触发 GitHub Actions run `29335557499`。五个矩阵格通过；Ubuntu Node 22/24 与 Windows 2025 + Node 22 暴露同一个 W05 Hook stdin 竞态。根因已在本地确定性复现并修复，远端精确修复提交验证尚未执行。
@@ -21,6 +21,7 @@
 | Emergent scenario | Source trigger | Risk family | Plan section to update | Status |
 |---|---|---|---|---|
 | EM-005 nonblocking Hook stdin | exact CI W05 lost events while every child exited 0 | Hook protocol / concurrency | W05 and Oracle 7/8 | accepted; local fix proved, remote closure pending |
+| EM-006 Windows reaper `EPERM` | fix CI exposed transient `EPERM` while contenders create/remove `.task.lock.reaper` | Windows lock recovery | W05/W06 and Oracle 8 | accepted; fix pending exact CI |
 
 ## Execution Contract Override
 
@@ -68,6 +69,7 @@
 | C1 | amplify W05 locally | C0 | isolated Node 22 stress | passed |
 | C2 | deterministic delayed-stdin regression | C1 | red before fix, green after fix | passed |
 | C3 | complete local regression | C2 | Node 22 then Node 26 | passed |
+| C3b | Windows reaper contention classification | second/third exact CI | preserve task-lock fail-closed semantics | passed by code inspection; remote proof pending |
 | C4 | exact-fix matrix | C3 + new SHA | pending | blocked |
 | C5 | Fable closing | C4 all green | pending | blocked |
 
@@ -77,7 +79,8 @@
 |---|---|---|---|---|---|---|
 | W05-REPRO | passed | amplify the exact silent-loss symptom | Node 22 at 100 concurrency produced `29/101` records; all children exited 0 with empty output | product | [ISSUE-001](issues/ISSUE-001-hook-stdin-eagain.md) | [W05 reproduction](#w05-repro--silent-authority-loss) |
 | W05-FIX | passed | delayed stdin and 100 concurrent hooks preserve every event | delayed test `2/2`; stress `101/101`; Node 22/26 full suites green | product | [ISSUE-001](issues/ISSUE-001-hook-stdin-eagain.md) | [W05 fix](#w05-fix--bounded-stdin-read-retry) |
-| E2E-009 | blocked | all eight matrix jobs, including four Windows cells, pass the exact fix SHA | fix is not yet a Git revision | product | [ISSUE-001](issues/ISSUE-001-hook-stdin-eagain.md) | [Exact CI](#e2e-009--exact-fix-ci) |
+| W05-WINDOWS-REAPER | blocked | reaper-directory contention retries without losing the real task lock | two diagnostic Windows jobs show transient `EPERM`; source fix not yet run remotely | product | [ISSUE-002](issues/ISSUE-002-windows-reaper-eperm.md) | [Windows reaper](#w05-windows-reaper--transient-eperm) |
+| E2E-009 | blocked | all eight matrix jobs, including four Windows cells, pass the exact fix SHA | stdin fix made Ubuntu green; Windows reaper fix has no exact run | product | [ISSUE-001](issues/ISSUE-001-hook-stdin-eagain.md), [ISSUE-002](issues/ISSUE-002-windows-reaper-eperm.md) | [Exact CI](#e2e-009--exact-fix-ci) |
 | GATE-005 | blocked | Fable returns final GO on the exact green release commit | Windows prerequisite not yet met | tooling | — | [Fable gate](#gate-005--fable-closing) |
 
 ## Evidence & Failure Scenes
@@ -124,10 +127,27 @@ fail 0
 
 - Probe: query the `test` workflow for the next pushed SHA and inspect all jobs.
 - Expected: portable macOS/Ubuntu Node 22/24 and Windows 2022/2025 × Node 22/24 all succeed; each Windows job passes W01–W08.
-- Actual: no fix SHA exists yet.
+- Actual: run `29336558086` made all four portable jobs green but all Windows W steps failed; diagnostic run `29336791375` produced two Windows passes and two failures whose child stderr was `EPERM` on `.task.lock.reaper`.
 - Prior failure scene: run `29335557499` passed five jobs and failed Ubuntu Node 22/24 plus Windows 2025 + Node 22 on W05.
 - Re-query: `gh run list --workflow test --branch agent/schema-v3-event-sourcing --json databaseId,headSha,status,conclusion`.
 - Cleanup safety: remote run is immutable evidence.
+
+### W05-WINDOWS-REAPER — transient EPERM
+
+- Probe: diagnostic assertion in exact run `29336791375` preserved each failed child process's stderr.
+- Expected: failure to acquire the optional reaper directory is treated as contention; the real task lock remains authoritative.
+- Actual raw slice:
+
+```text
+EPERM: operation not permitted, mkdir '...\\repo\\.taskloop\\.task.lock.reaper'
+permissionDecisionReason: taskloop: supervisor unavailable; refusing a write whose artifact revision cannot be recorded
+```
+
+- Diagnosis: Windows may return `EPERM/EACCES` while another process creates or removes the short-lived reaper directory. The code previously propagated anything except `EEXIST`.
+- Fix: on Windows only, classify `EPERM/EACCES` from reaper `mkdir` as contention and return to the bounded outer task-lock retry; persistent failure still reaches `TASKLOCK_TIMEOUT`.
+- Created identifiers: GitHub jobs `87097933087` and `87097933131`; no retained local data.
+- Re-query: exact Windows 2022/2025 × Node 22/24 W01–W08 step.
+- Cleanup safety: remote logs are immutable; diagnostic assertion remains useful failure evidence.
 
 ### GATE-005 — Fable closing
 
@@ -142,6 +162,7 @@ fail 0
 | ID | Type | Disposition | Detail | Close condition |
 |---|---|---|---|---|
 | [ISSUE-001](issues/ISSUE-001-hook-stdin-eagain.md) | product/concurrency | OPEN | Hook stdin `EAGAIN` was swallowed as an empty payload, silently losing event authority writes | exact fix SHA passes all eight matrix jobs and affected E2E dependents |
+| [ISSUE-002](issues/ISSUE-002-windows-reaper-eperm.md) | product/Windows concurrency | OPEN | transient reaper-directory `EPERM/EACCES` was propagated instead of retried as contention | exact fix SHA passes all four Windows cells and complete matrix |
 | GAP-005 | review/tooling | CONDITIONAL | Fable must wait for exact-fix Windows success | all four Windows cells green, then final GO with no edit |
 
 ## Data Created & Cleanup
@@ -164,4 +185,4 @@ gh run list --workflow test --branch agent/schema-v3-event-sourcing --json datab
 
 ## Next Actions for Agent
 
-- [ISSUE-001](issues/ISSUE-001-hook-stdin-eagain.md): commit and push the bounded stdin reader plus regression test, then rerun W05 and all matrix dependents on the exact new SHA. Close only after all eight jobs pass.
+- [ISSUE-001](issues/ISSUE-001-hook-stdin-eagain.md) and [ISSUE-002](issues/ISSUE-002-windows-reaper-eperm.md): commit and push both bounded contention fixes, then rerun W05 and all matrix dependents on the exact new SHA. Close only after all eight jobs pass.
