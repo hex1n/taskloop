@@ -49,7 +49,7 @@ test("Stop hooks exit zero with no task and with incompatible task state", (t) =
   stopped = run(CLI, ["hook", "--profile", "claude"], { cwd: repo, env, input: payload });
   assert.equal(stopped.status, 0);
   assert.equal(stopped.stderr, "task snapshot exists without a valid schema-v3 event authority; archive it with explicit user authorization\n");
-  assert.equal(stopped.stdout, '{"decision":"block","reason":"taskloop: task state unavailable; refusing to adjudicate Stop"}\n');
+  assert.equal(stopped.stdout, '{"decision":"block","reason":"taskloop: task state unavailable (ORPHAN_V3_SNAPSHOT); refusing to adjudicate Stop"}\n');
 });
 
 test("command-shaped authority fails closed when task authority is corrupt", (t) => {
@@ -64,7 +64,7 @@ test("command-shaped authority fails closed when task authority is corrupt", (t)
   });
   assert.equal(result.status, 0);
   assert.match(result.stdout, /permissionDecision.*deny/);
-  assert.match(result.stdout, /supervisor unavailable/);
+  assert.match(result.stdout, /supervisor unavailable \([A-Z0-9_]+\); refusing a write/);
 });
 
 test("task-engine decide/evolve are pure", () => {

@@ -130,12 +130,12 @@ test("Stop preserves the task-state failure protocol for unclassified lock error
   const result = run(["hook", "--profile", "claude"], { cwd: fx.repo, env, input: payload });
   assert.equal(result.status, 0);
   assert.equal(result.stderr, "synthetic task lock failure\n");
-  assert.equal(result.stdout, '{"decision":"block","reason":"taskloop: task state unavailable; refusing to adjudicate Stop"}\n');
+  assert.equal(result.stdout, '{"decision":"block","reason":"taskloop: task state unavailable (EACCES); refusing to adjudicate Stop"}\n');
 
   const safe = run(["hook", "--profile", "codex-safe"], { cwd: fx.repo, env, input: payload });
   assert.equal(safe.status, 0);
   assert.equal(safe.stdout, "");
-  assert.match(safe.stderr, /^synthetic task lock failure\ntaskloop: task state unavailable; refusing to adjudicate Stop; Codex safe profile cannot resume this session;/);
+  assert.match(safe.stderr, /^synthetic task lock failure\ntaskloop: task state unavailable \(EACCES\); refusing to adjudicate Stop; Codex safe profile cannot resume this session;/);
 });
 
 test("authority guard rejects legacy, orphan, mixed, and corrupt state without overwriting events", (t) => {

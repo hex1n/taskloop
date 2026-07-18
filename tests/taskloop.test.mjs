@@ -628,6 +628,33 @@ test("Codex PreToolUse injects the payload-domain session into taskloop CLI comm
   });
 });
 
+test("session injection folds backslash-newline continuations in taskloop commands", (t) => {
+  const fx = fixture(t);
+  // Agents format taskloop invocations across continuation lines; folding keeps
+  // them rewritable so the opening session stays bound instead of "cli".
+  const command = `node ${JSON.stringify(CLI)} status \\\n  --repo ${JSON.stringify(fx.repo)}`;
+  const result = run(["hook", "--profile", "claude"], {
+    cwd: fx.repo, env: fx.env,
+    input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, session_id: "codex-session-2", tool_name: "Bash", tool_input: { command } }),
+  });
+  assert.equal(result.status, 0);
+  const output = JSON.parse(result.stdout).hookSpecificOutput;
+  assert.equal(output.permissionDecision, "allow");
+  assert.equal(output.updatedInput.command, `export TASKLOOP_SESSION_ID='codex-session-2' TASKLOOP_ACTING_SESSION_ID='codex-session-2'; ${command}`);
+});
+
+test("single-quoted continuations stay literal and unrewritable taskloop text nudges toward a single command", (t) => {
+  const fx = fixture(t);
+  const command = `node ${JSON.stringify(CLI)} status --repo 'a\\\nb'`;
+  const result = run(["hook", "--profile", "claude"], {
+    cwd: fx.repo, env: fx.env,
+    input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, session_id: "codex-session-3", tool_name: "Bash", tool_input: { command } }),
+  });
+  assert.equal(result.status, 0);
+  assert.equal(result.stdout, "", "a literal quoted newline must not be folded into a rewrite");
+  assert.match(result.stderr, /run taskloop alone as a single command/);
+});
+
 test("episode-less authority changes retain the injected acting agent", (t) => {
   const fx = fixture(t);
   const env = { ...fx.env, TASKLOOP_SESSION_ID: "owner", TASKLOOP_ACTING_SESSION_ID: "child-agent" };
@@ -652,6 +679,80 @@ test("PreToolUse threads the host command id into the write-authorization record
   assert.equal(authorization.command_id, "toolu_write_01");
   // The opening CLI command carried no host command id and stays null.
   assert.equal(records.find((record) => record.events.some((event) => event.kind === "task_opened")).command_id, null);
+});
+
+test("PreToolUse survives a non-shell tool carrying a multi-line command field (Codex apply_patch)", (t) => {
+  const fx = fixture(t);
+  const env = { ...fx.env, TASKLOOP_SESSION_ID: "owner" };
+  assert.equal(open({ ...fx, env }).status, 0);
+  // Codex's apply_patch reaches the hook as a non-bash tool whose command field
+  // holds the multi-line patch text. Identity-assignment parsing must not treat
+  // each patch line as a null shell prefix and crash on item.invocation.
+  const patch = "*** Begin Patch\n*** Update File: work.txt\n@@\n-start\n+changed\n*** End Patch\n";
+  const result = run(["hook", "--profile", "claude"], {
+    cwd: fx.repo, env: fx.env,
+    input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, session_id: "owner", tool_name: "ApplyPatch", tool_input: { command: patch, file_path: path.join(fx.repo, "work.txt") } }),
+  });
+  assert.equal(result.status, 0);
+  assert.doesNotMatch(result.stdout + result.stderr, /Cannot read properties|supervisor unavailable/);
+});
+
+test("hooks never crash on hostile or malformed payloads", async (t) => {
+  const fx = fixture(t);
+  const env = { ...fx.env, TASKLOOP_SESSION_ID: "owner" };
+  assert.equal(open({ ...fx, env }).status, 0);
+  const patch = "*** Begin Patch\n*** Update File: work.txt\n@@\n-start\n+c\n*** End Patch\n";
+  const inRepo = path.join(fx.repo, "work.txt");
+  // [profile, payload-object-or-raw-string]; a crash surfaces as "supervisor
+  // error"/TypeError text because dispatchHook fails closed on any throw.
+  const pre = (over) => ({ hook_event_name: "PreToolUse", cwd: fx.repo, session_id: "owner", ...over });
+  const corpus = [
+    ["claude", pre({ tool_name: "ApplyPatch", tool_input: { command: patch } })],
+    ["claude", pre({ tool_name: "Edit", tool_input: { command: patch, file_path: inRepo } })],
+    ["claude", pre({ tool_name: "mcp__foo__bar", tool_input: { command: "a\nb;c|d" } })],
+    ["claude", pre({ tool_name: "Bash", tool_input: { command: "" } })],
+    ["claude", pre({ tool_name: "Bash", tool_input: { command: ["ls", "-la"] } })],
+    ["claude", pre({ tool_name: "Bash", tool_input: { command: 42 } })],
+    ["claude", pre({ tool_name: "Bash", tool_input: { command: { nested: true } } })],
+    ["claude", pre({ tool_name: "Bash", tool_input: null })],
+    ["claude", pre({ tool_name: "Bash", tool_input: ["a"] })],
+    ["claude", pre({ tool_name: "Write", tool_input: "not-an-object" })],
+    ["claude", pre({ tool_name: "Write", tool_input: { file_path: ["a", "b"] } })],
+    ["claude", pre({ tool_name: "Write", tool_input: { file_path: {} } })],
+    ["claude", pre({ tool_name: "Bash", tool_input: { command: "cat > f <<'EOF'\nTASKLOOP_SESSION_ID=x\nEOF" } })],
+    ["claude", pre({ tool_name: "Bash", tool_input: { command: "echo " + "x".repeat(200000) } })],
+    ["claude", pre({ tool_name: "PowerShell", tool_input: { command: "$env:A='b'\nSet-Content work.txt hi" } })],
+    ["claude", pre({ tool_name: "", tool_input: { command: "rm -rf x" } })],
+    ["claude", pre({ tool_name: null, tool_input: { file_path: inRepo } })],
+    ["claude", pre({ tool_name: "ApplyPatch", tool_input: { command: "git push --force\nrm -rf /\n*** Begin Patch" } })],
+    ["claude", pre({ session_id: "intruder", tool_name: "ApplyPatch", tool_input: { command: patch } })],
+    ["claude", pre({ session_id: "intruder", tool_name: "Bash", tool_input: { command: ["rm", "-rf"] } })],
+    ["claude", pre({ session_id: "intruder", tool_name: "Write", tool_input: null })],
+    ["claude", pre({ session_id: { a: 1 }, tool_name: "Write", tool_input: { file_path: inRepo } })],
+    ["claude", pre({ agent_id: ["x"], tool_name: "Write", tool_input: { file_path: inRepo } })],
+    ["claude", pre({ cwd: 42, tool_name: "ApplyPatch", tool_input: { command: patch } })],
+    ["claude", pre({ cwd: "/no/such/dir/xyz", tool_name: "ApplyPatch", tool_input: { command: patch } })],
+    ["codex-safe", pre({ tool_name: "ApplyPatch", tool_input: { command: patch } })],
+    ["codex-cli-legacy", pre({ tool_name: "ApplyPatch", tool_input: { command: patch } })],
+    ["claude", "this is not json {{{"],
+    ["claude", ""],
+    ["claude", "[1,2,3]"],
+    ["claude", { hook_event_name: "SessionStart", cwd: fx.repo, session_id: "owner" }],
+    // Stop last: closed attempts change lifecycle counters for later cases.
+    ["claude", { hook_event_name: "Stop", cwd: fx.repo, session_id: "owner", transcript_path: 42 }],
+    ["claude", { hook_event_name: "Stop", cwd: fx.repo, session_id: "intruder" }],
+    ["codex-safe", { hook_event_name: "Stop", cwd: fx.repo, session_id: "owner" }],
+  ];
+  for (let index = 0; index < corpus.length; index += 8) {
+    const results = await Promise.all(corpus.slice(index, index + 8).map(([profile, payload]) =>
+      runAsync(["hook", "--profile", profile, "--mode", "deny"], { cwd: fx.repo, env: fx.env, input: typeof payload === "string" ? payload : JSON.stringify(payload) })
+        .then((result) => ({ result, payload }))));
+    for (const { result, payload } of results) {
+      const label = typeof payload === "string" ? JSON.stringify(payload.slice(0, 30)) : `${payload.hook_event_name}/${payload.tool_name ?? "-"}`;
+      assert.equal(result.status, 0, `${label}: exit ${result.status}: ${result.stderr}`);
+      assert.doesNotMatch(result.stdout + result.stderr, /supervisor error|Cannot read properties/, label);
+    }
+  }
 });
 
 test("Codex session injection is scoped, validates owner and actor identities, and rejects conflicting overrides", (t) => {

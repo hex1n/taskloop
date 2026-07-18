@@ -37,3 +37,5 @@ Distributing a *new* managed skill blocks the release on any home that already h
 ## Docs gaps
 
 Re-derived something a fresh contributor should have known? Add one line here with the fact and where it was found. Once an entry stabilizes, promote it into the section where a fresh reader would look for it.
+
+- Non-shell tools (a Codex apply_patch, an Edit) also deliver `command` fields; shell-only semantics (identity-assignment parsing, session-injection rewrite) must guard on the tool first, or they crash the hook / degrade the task owner to "cli" and disarm foreign-session policy (found via a live Codex failure, 2026-07-18; diagnosis in `docs/plans/2026-07-18-hook-concurrency-resilience.md`).
