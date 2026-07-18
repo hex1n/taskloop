@@ -641,6 +641,19 @@ test("episode-less authority changes retain the injected acting agent", (t) => {
   assert.deepEqual(authorityChanges.map((record) => record.actor.session_id), ["child-agent", "child-agent"]);
 });
 
+test("PreToolUse threads the host command id into the write-authorization record", (t) => {
+  const fx = fixture(t);
+  const env = { ...fx.env, TASKLOOP_SESSION_ID: "owner" };
+  assert.equal(open({ ...fx, env }).status, 0);
+  const authorized = run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, session_id: "owner", tool_use_id: "toolu_write_01", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") } }) });
+  assert.equal(authorized.stdout, "");
+  const records = fs.readFileSync(path.join(fx.repo, ".taskloop", "events.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+  const authorization = records.find((record) => record.events.some((event) => event.kind === "write_authorized"));
+  assert.equal(authorization.command_id, "toolu_write_01");
+  // The opening CLI command carried no host command id and stays null.
+  assert.equal(records.find((record) => record.events.some((event) => event.kind === "task_opened")).command_id, null);
+});
+
 test("Codex session injection is scoped, validates owner and actor identities, and rejects conflicting overrides", (t) => {
   const fx = fixture(t);
   const hook = (session_id, tool_name, command, agent_id = undefined) => run(["hook", "--profile", "claude"], {
@@ -721,7 +734,7 @@ test("nudge mode records agent and permission anchors without denying wider untr
   const payload = JSON.parse(ledger.stdout);
   assert.equal(payload.integrity.record_count, 2);
   assert.deepEqual(readEvidence(fx.repo).filter((row) => row.kind === "untracked_write").map((row) => row.gate_seq), [1, 2]);
-  const rows = fs.readFileSync(path.join(fx.repo, ".taskloop", "untracked-observations-v1.jsonl"), "utf8");
+  const rows = fs.readFileSync(path.join(fx.repo, ".taskloop", "untracked-observations.jsonl"), "utf8");
   assert.match(rows, /"acting_session":"child"/); assert.match(rows, /"permission_mode_raw":"bypassPermissions"/); assert.match(rows, /"gate":"nudge"/);
   assert.equal(fs.readFileSync(path.join(fx.repo, ".taskloop", ".gitignore"), "utf8"), "*\n");
   assert.doesNotMatch(spawnSync("git", ["status", "--porcelain", "--untracked-files=all"], { cwd: fx.repo, encoding: "utf8" }).stdout, /\.taskloop/);
@@ -916,7 +929,7 @@ test("dropped PreToolUse evidence stays unknown across a different-session appen
 test("a corrupt scratch evidence counter rebuilds from the durable stream", (t) => {
   const fx = fixture(t);
   assert.equal(appendEvidence(fx.repo, { at: AT, kind: "probe", sequence_session: "owner", acting_session: "owner" }), true);
-  fs.writeFileSync(path.join(fx.repo, ".taskloop", "evidence-sequences-v1.json"), "{broken\n");
+  fs.writeFileSync(path.join(fx.repo, ".taskloop", "evidence-sequences.json"), "{broken\n");
   assert.equal(appendEvidence(fx.repo, { at: AT, kind: "probe", sequence_session: "owner", acting_session: "owner" }), true);
   const rows = readEvidence(fx.repo);
   assert.deepEqual(rows.map((row) => row.seq), [1, 2]);

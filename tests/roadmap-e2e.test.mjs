@@ -40,6 +40,6 @@ test("roadmap E2E: dedicated criterion, host anchors, actual-use floor, and ledg
   assert.equal(payload.authority_use.host_key_bypass_seen, true);
   assert.equal(payload.integrity.record_count, 2);
   assert.equal(payload.integrity.coverage, "covered");
-  const evidence = fs.readFileSync(path.join(repo, ".taskloop", "untracked-observations-v1.jsonl"), "utf8");
+  const evidence = fs.readFileSync(path.join(repo, ".taskloop", "untracked-observations.jsonl"), "utf8");
   assert.match(evidence, /"acting_session":"child"/); assert.match(evidence, /"permission_mode_raw":"bypassPermissions"/);
 });

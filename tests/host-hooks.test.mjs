@@ -85,6 +85,7 @@ test("explicit profiles decode payloads and generate self-identifying recipes", 
     repo: "/repo",
     sessionId: "owner",
     agentId: "child-agent",
+    commandId: null,
     permissionModeRaw: "bypassPermissions",
     transcriptPath: null,
     toolName: "Bash",
@@ -100,6 +101,18 @@ test("explicit profiles decode payloads and generate self-identifying recipes", 
 
   assert.throws(() => decodeHook({ profile: "codex-app", payload: {} }), /unsupported hook profile: codex-app/);
   assert.throws(() => buildHookRecipe({ profile: "unknown", command: "taskloop" }), /explicit hook profile required/);
+});
+
+test("decodeHook passes through a host command id, preferring explicit command_id over tool_use_id", () => {
+  const base = { profile: "claude", event: "pre_tool_use", repo: ".", sessionId: null, agentId: null, permissionModeRaw: null, transcriptPath: null, toolName: "", toolInput: {} };
+  const commandId = (payload) => decodeHook({ profile: "claude", payload }).commandId;
+  assert.equal(decodeHook({ profile: "claude", payload: {} }).commandId, null, "absent host id degrades to null");
+  assert.equal(commandId({ tool_use_id: "toolu_01ABC" }), "toolu_01ABC", "Claude tool_use_id flows through");
+  assert.equal(commandId({ command_id: "cmd-1" }), "cmd-1", "explicit command_id flows through");
+  assert.equal(commandId({ command_id: "cmd-1", tool_use_id: "toolu_01ABC" }), "cmd-1", "explicit command_id wins");
+  assert.equal(commandId({ tool_use_id: "" }), null, "empty host id is rejected");
+  assert.equal(commandId({ tool_use_id: 42 }), null, "non-string host id is rejected");
+  assert.deepEqual(decodeHook({ profile: "claude", payload: { hook_event_name: "PreToolUse", tool_use_id: "toolu_09XYZ" } }), { ...base, commandId: "toolu_09XYZ" });
 });
 
 test("encoding rejects unknown explicit profiles and mismatched event results", () => {
