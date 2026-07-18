@@ -668,7 +668,7 @@ test("Codex session injection is scoped, validates owner and actor identities, a
 
   const conflict = hook("codex-1", "Bash", `TASKLOOP_SESSION_ID=someone-else node ${JSON.stringify(CLI)} status`);
   assert.match(conflict.stdout, /"permissionDecision":"deny"/);
-  assert.match(conflict.stdout, /conflicts with the Codex hook session_id/);
+  assert.match(conflict.stdout, /conflicts with the host hook session id/);
 
   const forgedActor = hook("codex-1", "Bash", `TASKLOOP_ACTING_SESSION_ID=forged node ${JSON.stringify(CLI)} status`);
   assert.match(forgedActor.stdout, /"permissionDecision":"deny"/);
@@ -1043,9 +1043,9 @@ test("session-scoped PreToolUse protects control state and gates foreign writes 
   const inside = hook("foreign-session", "Write", { file_path: path.join(fx.repo, "work.txt") });
   assert.match(inside.stdout, /permissionDecision.*deny/); assert.match(inside.stdout, /taskloop join/);
   const unknown = hook("foreign-session", "Bash", { command: "sed -i.bak s/a/b/ work.txt" });
-  assert.match(unknown.stdout, /permissionDecision.*deny/); assert.match(unknown.stdout, /not provable/);
+  assert.match(unknown.stdout, /permissionDecision.*deny/); assert.match(unknown.stdout, /resolve the write target/);
   const mixed = hook("foreign-session", "Bash", { command: `sed -i.bak s/a/b/ work.txt && echo x > ${path.join(fx.root, "outside.txt")}` });
-  assert.match(mixed.stdout, /permissionDecision.*deny/); assert.match(mixed.stdout, /not provable/);
+  assert.match(mixed.stdout, /permissionDecision.*deny/); assert.match(mixed.stdout, /resolve the write target/);
   const changedDirectory = hook("foreign-session", "Bash", { command: "cd nested && echo x > relative.txt" });
   assert.match(changedDirectory.stdout, /permissionDecision.*deny/); assert.match(changedDirectory.stdout, /directory change/);
   const alias = path.join(fx.repo, "alias.txt");
