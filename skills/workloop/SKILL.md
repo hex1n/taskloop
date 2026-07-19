@@ -51,6 +51,17 @@ taskloop open --goal "<goal>" --criterion-file "acceptance.mjs" \
 Inline binary criteria remain available for simple local checks, but they are
 not the canonical portable recipe.
 
+Probe the seams the work must change — a module's exports, a command's
+behavior, a produced artifact. A probe that greps wording binds the done-when
+to incidental spelling (a comment naming its own needle fails it), so reach
+for source-text probes only when the artifact has no behavioral seam, as
+prose does.
+When the done-when spans many sub-goals, give each a cheap discriminating
+probe and run them before any expensive suite: early rounds then fail in
+seconds, the suite prices only the closing path, and the sorted failing-probe
+ids form a failure signature that moves exactly when the remaining sub-goals
+change.
+
 Declare foreseeable authority at open. Work that will delete files it creates
 — scratch fixtures, generated trees — should request a path-scoped destructive
 grant up front (`--destructive-scope <root> --reason`): in-scope cleanup
@@ -91,6 +102,13 @@ widen the envelope to chase advisory findings — back into the loop, then
 record the current generation/revisions and blocking/advisory counts with
 `review`. taskloop only emits the requirement; reviewer scheduling belongs to
 the host.
+
+Reviewers work read-only from a fresh context: point them at the diff, let
+them run checks, and route scratch files to the host's transient area — an
+in-repo repro write is foreign work to the active envelope, and a separate
+worktree is its sanctioned home. Anchor the recorded counts with a review
+receipt: the findings, the reviewed generation and revisions, and a reviewer
+identity a later audit can trace.
 
 ### Steering
 

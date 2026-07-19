@@ -8,26 +8,27 @@ import os from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
-import { releaseOwnedDirectoryLock } from "./lib/prims.mjs";
+import { directoryLockBackoff, localTimestamp, withOwnedDirectoryLock } from "./lib/prims.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
 const SOURCE = path.resolve(process.env.TASKLOOP_INSTALL_REPO ?? path.dirname(__filename));
 const HOME = path.resolve(process.env.TASKLOOP_INSTALL_HOME ?? os.homedir());
+// Read the source checkout's contract from its prims.mjs text instead of
+// importing it: TASKLOOP_INSTALL_REPO may point at a different checkout than
+// the one this installer file (and its ./lib import) was loaded from, and the
+// gate must judge what it is about to install, not what it is running as.
 const RUNTIME_CONTRACT = (() => {
   const source = fs.readFileSync(path.join(SOURCE, "lib", "prims.mjs"), "utf8");
   const value = Number(source.match(/const RUNTIME_CONTRACT = (\d+);/)?.[1]);
   if (value !== 5) throw new Error(`taskloop installer requires runtime contract 5 source; refusing contract ${Number.isFinite(value) ? value : "unknown"}`);
   return value;
 })();
+// Module-level plan log. Every exported entry point resets it so a library
+// caller never inherits a previous invocation's rows; main() aggregates the
+// rows appended by everything it runs after the one entry-point reset.
 const ACTIONS = [];
 const INSTALL_LOCK_TIMEOUT_MS = 30_000;
 const INSTALL_LOCK_STALE_MS = 5 * 60_000;
-
-function localTimestamp(when = new Date()) {
-  const at = when instanceof Date ? when : new Date(when);
-  const pad = (value) => String(value).padStart(2, "0");
-  return `${at.getFullYear()}-${pad(at.getMonth() + 1)}-${pad(at.getDate())} ${pad(at.getHours())}:${pad(at.getMinutes())}:${pad(at.getSeconds())}`;
-}
 
 function plan(kind, detail) {
   ACTIONS.push([kind, detail]);
@@ -144,7 +145,7 @@ function managedTreeDigest(root) {
   }
 }
 
-function managedTreeMatches(source, target, sourceEntries) {
+function managedTreeMatches(target, sourceEntries) {
   try {
     if (!fs.lstatSync(target).isDirectory()) return false;
     const targetEntries = treeManifest(target);
@@ -168,7 +169,7 @@ function managedTreeMatches(source, target, sourceEntries) {
 
 function copyManagedTree(source, target, dry) {
   const sourceEntries = treeManifest(source);
-  if (managedTreeMatches(source, target, sourceEntries)) {
+  if (managedTreeMatches(target, sourceEntries)) {
     plan("ok", target);
     return;
   }
@@ -587,108 +588,21 @@ function pruneRuntimes(runtimeRoot, activeHash, dry) {
   }
 }
 
-function waitBriefly(milliseconds = 25) {
-  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, milliseconds);
-}
-
-function readLockOwner(lock) {
-  try {
-    return JSON.parse(fs.readFileSync(path.join(lock, "owner.json"), "utf8"));
-  } catch {
-    return null;
-  }
-}
-
-function processIsAlive(pid) {
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch (error) {
-    // EPERM means the process exists but is owned by another user. Only ESRCH
-    // proves that the recorded owner is gone.
-    return error?.code !== "ESRCH";
-  }
-}
-
-function reapDeadInstallLock(lock) {
-  const reaper = `${lock}.reaper`;
-  try {
-    fs.mkdirSync(reaper);
-  } catch (error) {
-    if (error?.code === "EEXIST") return false;
-    throw error;
-  }
-  try {
-    let stat;
-    try {
-      stat = fs.statSync(lock);
-    } catch (error) {
-      if (error?.code === "ENOENT") return true;
-      throw error;
-    }
-    if (Date.now() - stat.mtimeMs <= INSTALL_LOCK_STALE_MS) return false;
-    const owner = readLockOwner(lock);
-    if (owner && processIsAlive(owner.pid)) return false;
-    const quarantine = `${lock}.stale.${process.pid}.${randomUUID()}`;
-    try {
-      fs.renameSync(lock, quarantine);
-    } catch (error) {
-      if (error?.code === "ENOENT") return true;
-      throw error;
-    }
-    fs.rmSync(quarantine, { recursive: true, force: true });
-    return true;
-  } finally {
-    try {
-      fs.rmSync(reaper, { recursive: true, force: true });
-    } catch {
-      // A stuck reaper makes later installs fail loudly rather than steal a
-      // lock whose ownership cannot be proven.
-    }
-  }
-}
-
-function releaseOwnedInstallLock(lock, token) {
-  releaseOwnedDirectoryLock(lock, token, { pathExists: exists, readOwner: readLockOwner, wait: waitBriefly });
-}
-
 function withInstallLock(home, action) {
   const lock = path.join(home, "bin", ".taskloop-runtime.install-lock");
   fs.mkdirSync(path.dirname(lock), { recursive: true });
-  const deadline = Date.now() + INSTALL_LOCK_TIMEOUT_MS;
-  const token = randomUUID();
-  for (;;) {
-    try {
-      fs.mkdirSync(lock);
-    } catch (error) {
-      if (error?.code !== "EEXIST") throw error;
-      if (reapDeadInstallLock(lock)) continue;
-      if (Date.now() >= deadline) throw new Error(`timed out waiting for taskloop install lock: ${lock}`);
-      waitBriefly();
-      continue;
-    }
-    try {
-      fs.writeFileSync(
-        path.join(lock, "owner.json"),
-        JSON.stringify({ pid: process.pid, token, at: localTimestamp() }) + "\n",
-        "utf8",
-      );
-      break;
-    } catch (error) {
-      fs.rmSync(lock, { recursive: true, force: true });
-      throw error;
-    }
-  }
-  try {
-    return action();
-  } finally {
-    try {
-      releaseOwnedInstallLock(lock, token);
-    } catch {
-      // A later install can reap this lock only after its owner is gone.
-    }
-  }
+  return withOwnedDirectoryLock(lock, action, {
+    timeoutMs: INSTALL_LOCK_TIMEOUT_MS,
+    staleMs: INSTALL_LOCK_STALE_MS,
+    // Site policy: installs are rare and long, so keep the original 25ms
+    // contention cadence instead of the shared 5ms default.
+    wait: () => directoryLockBackoff(25),
+    ownerExtra: { at: localTimestamp() },
+    removeOnOwnerWriteFailure: true,
+    timeoutError: () => new Error(`timed out waiting for taskloop install lock: ${lock}`),
+    // A later install can reap this lock only after its owner is gone.
+    onReleaseError: () => {},
+  });
 }
 
 function activateRuntimeShims(home, hash, dry) {
@@ -721,6 +635,7 @@ function installTaskloopRuntimeUnlocked(repo, home, dry, { activate = true } = {
 }
 
 export function installTaskloopRuntime(repo, home, dry = false) {
+  ACTIONS.length = 0;
   const install = () => installTaskloopRuntimeUnlocked(repo, home, dry);
   return dry ? install() : withInstallLock(home, install);
 }
@@ -849,11 +764,13 @@ function installTaskloopAssetsUnlocked(repo, home, dry) {
 }
 
 export function installTaskloopAssets(repo, home, dry = false) {
+  ACTIONS.length = 0;
   const install = () => installTaskloopAssetsUnlocked(repo, home, dry);
   return dry ? install() : withInstallLock(home, install);
 }
 
 export function installTaskloop(repo, home, dry = false) {
+  ACTIONS.length = 0;
   const install = () => {
     const runtime = installTaskloopRuntimeUnlocked(repo, home, dry, { activate: false });
     const releaseId = runtime.hash;

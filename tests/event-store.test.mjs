@@ -413,7 +413,9 @@ test("runtime-contract-5 fixture freezes a closed persisted type graph and diges
   }
   assert.equal(
     createHash("sha256").update(JSON.stringify({ fields: PERSISTED_FIELD_CONTRACTS, nested: PERSISTED_NESTED_OBJECTS })).digest("hex"),
-    "6e0e987eb5421fbc4f97a84bb721425239f6c6cb7e72679bab5c13841d37a02a",
+    // cli_verify observation source added 2026-07-19; the deliberate change is
+    // documented in docs/plans/2026-07-19-cli-recorded-observation.md.
+    "d2fe219f390882a111fdbe618e10cda374401248b62e9f51a82122f0dd6fcf94",
   );
 
   assert.deepEqual(PERSISTED_CANONICAL_PREIMAGES, {

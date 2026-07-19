@@ -140,3 +140,19 @@ write_authorized: Object.freeze(["files"]),
 | `many_touched_files` | `evidence.touched_files` | **观测** | 撒不了谎（但见决议 2：是死的） |
 
 地板号称让观测压过声明，**6 个输入里 4 个是声明的函数**。真观测只剩 `risk_floor_events`（时序，恰是 07 决议 4 已认出并押上的那条）与 `many_touched_files`（结构上不可达）。**地板里唯一观测「你实际动了什么」的规则，是死的。**
+
+## 实证追加：2026-07-19 小改动 × 多写根的评审税样本
+
+同日两个连续任务（味道批次、advisory 跟进批次）的账本对照：
+
+| | 批次一 | 批次二 |
+|---|---|---|
+| `spent.writes` | 84 | 4 |
+| 实际触达文件 | 12 | 3 |
+| 写根 | `lib` + `install.mjs` + `tests` + … | `lib` + `install.mjs` |
+| `floor.reasons` | `multiple_actual_write_roots`, `many_touched_files` | `multiple_actual_write_roots` |
+| 强制评审 | fresh_context | fresh_context（同额） |
+
+样本含义：`multiple_actual_write_roots` 把「仓库根下的单文件」（`install.mjs`）计为独立写根，4 次写的外科修复与 84 次写的批量重构支付同额评审税。写根计数是粗粒度的爆炸半径代理——这正是上文「地板输入认识论」里 `many_touched_files` 一系的结构问题在另一条规则上的显影。
+
+**不动机制**。翻转条件：meta-loop 复盘看到 ≥3 次同型摩擦（小写入量 × 恰两写根 × 全额评审税）后，候选机制是升档需 `roots > 1 && writes > N` 的合取，而非给地板加权重参数。单样本（n=2 且评审确有产出：批次一 3 条 advisory 全部有效）不足以证明税负错付。

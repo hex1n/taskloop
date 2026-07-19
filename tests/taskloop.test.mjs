@@ -2012,3 +2012,53 @@ test("criterion definition hash is stable while generation ids are not", () => {
   const value = task().criterion; assert.equal(criterionDefinitionHash(value), criterionDefinitionHash({ ...value }));
   assert.notEqual(constructPolicy("default"), POLICY_PRESETS.default);
 });
+
+test("verify --record persists a cli_verify observation that feeds rounds and witness", (t) => {
+  const fx = fixture(t);
+  assert.equal(open(fx).status, 0);
+  const recorded = run(["verify", "--record", "--repo", fx.repo], { env: fx.env });
+  assert.equal(recorded.status, 1, recorded.stderr);
+  const payload = JSON.parse(recorded.stdout);
+  assert.equal(payload.recorded, true);
+  assert.equal(payload.status, "observed");
+  assert.equal(payload.observation.verdict, "unsatisfied");
+  const state = loadTask(fx.repo);
+  assert.equal(state.spent.rounds, 1);
+  assert.equal(state.attempts.length, 1);
+  assert.equal(state.witness.source_event, "cli_verify");
+  assert.equal(state.lifecycle.state, "active");
+  assert.match(fs.readFileSync(path.join(fx.repo, ".taskloop", "events.jsonl"), "utf8"), /cli_verify/);
+});
+
+test("three identical recorded failure signatures suspend the task as stuck", (t) => {
+  const fx = fixture(t);
+  fs.writeFileSync(path.join(fx.repo, "check.mjs"), "process.stdout.write('TASKLOOP_CRITERION: fixed failure cause\\n'); process.exit(1);\n");
+  assert.equal(open(fx).status, 0);
+  for (let round = 0; round < 2; round += 1) {
+    const step = run(["verify", "--record", "--repo", fx.repo], { env: fx.env });
+    assert.equal(step.status, 1, step.stderr);
+    assert.equal(JSON.parse(step.stdout).status, "observed");
+  }
+  const third = run(["verify", "--record", "--repo", fx.repo], { env: fx.env });
+  assert.equal(third.status, 1, third.stderr);
+  const payload = JSON.parse(third.stdout);
+  assert.equal(payload.status, "suspended");
+  assert.equal(payload.reason, "stuck");
+  const state = loadTask(fx.repo);
+  assert.equal(state.lifecycle.state, "suspended");
+  assert.equal(state.lifecycle.reason, "stuck");
+  // The recording session continues, so the suspension leaves the episode open.
+  assert.equal(state.episodes.at(-1).ended_at, null);
+});
+
+test("a satisfied recorded observation auto-closes an eligible default task", (t) => {
+  const fx = fixture(t);
+  assert.equal(open(fx).status, 0);
+  fs.writeFileSync(path.join(fx.repo, "done"), "1\n");
+  const recorded = run(["verify", "--record", "--repo", fx.repo], { env: fx.env });
+  assert.equal(recorded.status, 0, recorded.stderr);
+  const payload = JSON.parse(recorded.stdout);
+  assert.equal(payload.status, "terminal");
+  assert.equal(payload.outcome, "achieved");
+  assert.equal(loadTask(fx.repo).lifecycle.outcome, "achieved");
+});

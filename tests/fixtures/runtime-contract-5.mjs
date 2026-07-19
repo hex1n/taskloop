@@ -247,7 +247,7 @@ const PERSISTED_NESTED_OBJECTS = Object.freeze({
   witness: Object.freeze({
     criterion_generation_id: "uuid",
     observed_at: "utc-iso-milliseconds",
-    source_event: "enum:open|stop|achieve",
+    source_event: "enum:open|stop|achieve|cli_verify",
   }),
   alignment: Object.freeze({ because: "non-empty-string", not_covered: "array<non-empty-string>" }),
   envelope: Object.freeze({
@@ -381,7 +381,7 @@ const PERSISTED_NESTED_OBJECTS = Object.freeze({
   "payload.write_authorized": Object.freeze({ files: "non-empty-array<repo-relative-path>" }),
   "payload.criterion_observed": Object.freeze({
     observation: "object:observation", attempt_id: "null|uuid", signature: "null|non-empty-string",
-    failure_summary: "string:max-160-utf8-bytes", drift: "array<repo-relative-path>", source: "enum:open|stop|achieve",
+    failure_summary: "string:max-160-utf8-bytes", drift: "array<repo-relative-path>", source: "enum:open|stop|achieve|cli_verify",
   }),
   "payload.criterion_side_effect_recorded": Object.freeze({ observation: "object:observation" }),
   "payload.output_tokens_tallied": Object.freeze({
