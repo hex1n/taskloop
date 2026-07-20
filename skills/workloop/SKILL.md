@@ -97,18 +97,11 @@ Read `status` after the last substantive write. A `criterion_assurance_gap`
 requires a stronger criterion or an explicit `accept-proof-gap`; reviewer prose
 cannot repair machine proof. When `review_requirement.level` is non-null and
 not accepted, ask a reviewer at least that independent (`fresh_context` or
-`second_model`), feed the blocking findings — only the blocking ones; never
-widen the envelope to chase advisory findings — back into the loop, then
-record the current generation/revisions and blocking/advisory counts with
-`review`. taskloop only emits the requirement; reviewer scheduling belongs to
-the host.
-
-Reviewers work read-only from a fresh context: point them at the diff, let
-them run checks, and route scratch files to the host's transient area — an
-in-repo repro write is foreign work to the active envelope, and a separate
-worktree is its sanctioned home. Anchor the recorded counts with a review
-receipt: the findings, the reviewed generation and revisions, and a reviewer
-identity a later audit can trace.
+`second_model`) and conduct the review by the two-axis discipline in
+`../loop-core/REFERENCE.md`: feed the blocking findings back — the criterion
+(spec) axis alone gates, standards findings are advisory — then record the
+current generation/revisions and blocking/advisory counts with `review`.
+taskloop only emits the requirement; reviewer scheduling belongs to the host.
 
 ### Steering
 

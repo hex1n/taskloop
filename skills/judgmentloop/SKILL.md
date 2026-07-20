@@ -40,10 +40,11 @@ evidence to move it.
 
 ## 4. Independent review before acceptance
 
-Ask at least a `fresh_context` reviewer to judge the draft against the
-pre-registered rubric only, then feed blocking findings back into the draft
-and record the review. Reviewer prose never substitutes for the human
-verdict; it earns the right to ask for one.
+Ask at least a `fresh_context` reviewer and conduct the review by the two-axis
+discipline in `../loop-core/REFERENCE.md`, with the rubric as the spec axis:
+judge the draft against the pre-registered rubric, feed blocking findings back
+into the draft, record the review. Reviewer prose never substitutes for the
+human verdict; it earns the right to ask for one.
 
 ## 5. Human acceptance closes
 

@@ -152,6 +152,28 @@ and substantive amendment expires review acceptance. Runtime status exposes
 `proof_assurance`, `machine_risk_floor`, and `review_requirement`; the runtime
 never launches a reviewer.
 
+A reviewer works read-only from a fresh context: point them at the diff, let
+them run checks, and route scratch files to the host's transient area — an
+in-repo repro write is foreign work to the active envelope, and a separate
+worktree is its sanctioned home. A review runs two axes. The spec axis asks
+whether the work meets the pre-registered criterion or rubric; its failures are
+the blocking findings, and they alone gate acceptance. The standards axis asks
+whether the work follows conventions the criterion never encoded; its findings
+are advisory — recorded, never blocking, never a reason to widen the envelope.
+The standards axis reads the repository's own documented conventions first —
+where the repository endorses what instinct would flag, the repository wins —
+and skips whatever tooling already enforces. Every finding carries its
+evidence: a spec finding quotes the criterion or rubric clause it fails, a
+standards finding names the convention and quotes the offending hunk, and a
+finding that can name no convention is instinct, flagged as the judgement call
+it is. The two axes stay separate so neither masks the other: work can meet the
+criterion while its conventions rot, and the standards axis is the only thing
+that sees that rot. Feed the blocking findings back; leave advisory findings in
+the ledger, where the aggregate review mines them as the standards axis the
+criterion could not see. Anchor the recorded counts with a review receipt: the
+findings, the reviewed generation and revisions, and a reviewer identity a
+later audit can trace.
+
 ```text
 taskloop review --level second-model --reviewer <id> \
   --blocking-findings 0 --advisory-findings 1
