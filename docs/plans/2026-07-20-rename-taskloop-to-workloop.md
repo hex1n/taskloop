@@ -47,9 +47,12 @@
 - [x] AGENTS.md:35 定位句从 "The runtime is the stop gate" 升级为完整监督面:
   授权、实时执法、裁决、存证、停线。
 - [x] HOSTS.md:3 同款措辞修正,保留 gate-vs-driver 站位对比。
-- [ ] `docs/decisions/2026-07-20-flagship-rename-workloop.md`:命名决策、七轮
-  筛选依据、旗舰模式先例、历史不改原则。
-- [ ] 建议 dogfood:用运行时自己 `open` 此工作,criterion 见"完成判据"。
+- [x] `docs/decisions/2026-07-20-flagship-rename-workloop.md`:命名决策、七轮
+  筛选依据、旗舰模式先例、历史不改原则,并追记硬切换裁决与四处出血证据。
+- [ ] ~~建议 dogfood:用运行时自己 `open` 此工作~~。**未做,且已错过窗口**:
+  改名期间本仓库状态目录先被嵌套孤立、后经手工恢复,期间运行时读不到任务,
+  无法自我监督。这条建议本身是对的——若当初 dogfood 成功,`status` 报 no task
+  会立刻暴露状态目录事故,而不是拖到事后排查才发现。
 
 ### Phase 1 — 源码与活文档(纯内部,test-gated)
 
