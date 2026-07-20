@@ -110,8 +110,10 @@
   清除,删前确认无任何可执行配置引用它们。
 - [x] `~/.claude/settings.json` 的 PreToolUse/Stop 已指向 `workloop.mjs`;
   `~/.codex/config.toml` 的 `writable_roots` 与 project trust 条目已清理。
-- [ ] `lib/host-hooks.mjs` recipes 更新;各宿主 repo 重装 hook,
-  `hooks --action record-install` 留痕。
+- [x] `lib/host-hooks.mjs` recipes **无需更新**(命令路径自引用推导,见风险段)。
+  两侧宿主 hook 配置已核对到与 recipe 逐字节一致,`~/.codex/hooks.json` 的
+  旧 shim 路径已修;claude 与 codex-safe 均已 `record-install` 留痕。
+  覆写配置会删掉宿主上无关的 hook(ai-notifier、SessionStart 等),故只逐项改。
 
 ### Phase 4 — 对外(不可逆,逐项确认后执行)
 
@@ -128,9 +130,10 @@
 
 ### 硬切换的实测代价:产品名嵌进持久化路径(2026-07-20)
 
-根因一条:**产品名同时是状态目录名、manifest 文件名和 sandbox 可写根**,而
-运行时会按需自建状态目录。于是"改名"这个动作在三处各自失败一次,形态不同,
-共同点是**静默**——没有一处报错,全部表现为"看起来正常但账本不见了"。
+根因一条:**产品名同时是状态目录名、manifest 文件名、sandbox 可写根和宿主
+hook 命令行**,而运行时会按需自建状态目录。于是"改名"这个动作在四处各自失败
+一次,形态不同,共同点是**静默**——没有一处报错,全部表现为"看起来正常但
+账本不见了"。
 
 1. **仓库状态目录——嵌套而非改名。** 手工 `mv .taskloop .workloop` 时
    `.workloop/` 已被运行时建出(它先写了 `.gitignore`),`mv` 于是把旧目录
@@ -148,15 +151,30 @@
    `needs_manual_intervention` 并在 `activateRuntimeShims` 之前 return——新
    shim 装不上,旧 shim 继续服务旧运行时,失败只在 journal 里可见。手工把
    manifest 改名即解。
+4. **Codex hook 配置——清理旧 shim 时打断了监督。** `~/.codex/hooks.json` 的
+   PreToolUse 与 Stop 都硬编码 `node "~/bin/taskloop.mjs"`。删除旧 shim 时只
+   检查了 `~/.claude/settings.json` 与 `~/.codex/config.toml`,遗漏这个文件,
+   于是两个 hook 一并指向不存在的路径(实证:`MODULE_NOT_FOUND`),直到下一
+   次排查才发现。修复即把两处命令与 statusMessage 换成 workloop;matcher 与
+   timeout 本就与 `codex-safe` recipe 一致,无需改动。
 
-两条可迁移的结论:
+**注意 recipe 本身不需要改。** `buildHookRecipe` 接收命令作为参数,路径由
+`lib/application.mjs` 从 `process.argv[1]` 自引用推导,不含硬编码产品名——
+所以"更新 recipes"这条按构造已满足;真正带名字的是**各宿主已落盘的 hook
+配置**,而那不在本仓库内,也不会出现在任何 diff 里。
 
-- **改名前先盘点"名字进了哪些持久化路径"**,而不是只 grep 源码。本次三处
-  全部在版本控制之外(状态目录、HOME 目录、`~/bin` manifest),没有 git 兜底,
-  也不会出现在任何 diff 里。
+三条可迁移的结论:
+
+- **改名前先盘点"名字进了哪些持久化路径"**,而不是只 grep 源码。本次四处
+  全部在版本控制之外(状态目录、HOME 目录、`~/bin` manifest、宿主 hook 配置),
+  没有 git 兜底,也不会出现在任何 diff 里。
 - **`mv A B` 不是改名,是"B 存在与否决定语义"。** 迁移已存在的目标目录必须
   逐项移动内容并对每个碰撞 fail-closed;整目录 `mv` 只在目标确不存在时安全。
   作废的 `migrate-state-dir` verb 原本要编码的正是这条,现由本节承载。
+- **确认"没有引用"时不要用会静默截断的检查。** 第 4 处正是这么漏掉的:
+  `grep -r ... | head -20` 被会话记录的匹配灌满,活配置被挤出输出,而截断的
+  结果被当成了完整结论。删除前的引用排查要么全量输出,要么按文件名收窄,
+  不能让 `head` 决定证据边界。删除是不可逆的,检查却是可以重跑的。
 
 ## 完成判据
 
