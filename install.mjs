@@ -7,7 +7,7 @@ import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { fileURLToPath, pathToFileURL } from "node:url";
+import { fileURLToPath } from "node:url";
 import { directoryLockBackoff, localTimestamp, withOwnedDirectoryLock } from "./lib/prims.mjs";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -998,6 +998,25 @@ export function reportActions(header, trailer = "") {
   return counts.error ? 1 : 0;
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+// Compare resolved real paths, not the raw argv string. Module resolution
+// hands `import.meta.url` the symlink-resolved path while process.argv[1] keeps
+// whatever the caller typed, so on macOS every /var and /tmp path (both symlinks
+// into /private) made this guard false: main() silently never ran and the
+// process still exited 0, reporting a successful install that installed
+// nothing. Any home or checkout behind a symlink hits the same thing.
+export function invokedAsScript(moduleUrl) {
+  const entry = process.argv[1];
+  if (!entry) return false;
+  const resolve = (value) => {
+    try {
+      return fs.realpathSync(value);
+    } catch {
+      return path.resolve(value);
+    }
+  };
+  return resolve(entry) === resolve(fileURLToPath(moduleUrl));
+}
+
+if (invokedAsScript(import.meta.url)) {
   process.exit(main());
 }

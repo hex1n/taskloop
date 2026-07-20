@@ -12,8 +12,7 @@
 import os from "node:os";
 import path from "node:path";
 import process from "node:process";
-import { pathToFileURL } from "node:url";
-import { reportActions, uninstallWorkloop } from "./install.mjs";
+import { invokedAsScript, reportActions, uninstallWorkloop } from "./install.mjs";
 
 const HOME = path.resolve(process.env.WORKLOOP_INSTALL_HOME ?? os.homedir());
 const FLAGS = new Set(["--dry-run", "--purge-ledger"]);
@@ -29,6 +28,6 @@ function main() {
   return reportActions(`workloop uninstall ${dry ? "(dry run) " : ""}from ${HOME}`);
 }
 
-if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
+if (invokedAsScript(import.meta.url)) {
   process.exit(main());
 }

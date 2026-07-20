@@ -245,3 +245,35 @@ test("uninstall on a home that never installed workloop changes nothing", (t) =>
   assert.match(result.stdout, /0 remove/);
   assert.equal(run(path.join(ROOT, "uninstall.mjs"), ["--bogus"], { env: { ...process.env, WORKLOOP_INSTALL_HOME: home } }).status, 2);
 });
+
+test("the published tarball carries exactly what installing needs", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-pack-")); const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const packed = spawnSync("npm", ["pack", "--pack-destination", root], { cwd: ROOT, encoding: "utf8" });
+  assert.equal(packed.status, 0, packed.stderr);
+  const tarball = path.join(root, packed.stdout.trim().split("\n").at(-1));
+  assert.equal(spawnSync("tar", ["-xzf", tarball, "-C", root], { encoding: "utf8" }).status, 0);
+  const pkg = path.join(root, "package");
+
+  // Publishing internal working material is not undoable, so the allowlist is
+  // asserted from both directions: what must ship, and what must never.
+  for (const required of ["bin", "lib", "skills", "install.mjs", "uninstall.mjs", "package.json"]) {
+    assert.ok(fs.existsSync(path.join(pkg, required)), `${required} must ship`);
+  }
+  for (const excluded of ["docs", "tests", ".scratch", "hooks", "AGENTS.md", "CLAUDE.md"]) {
+    assert.equal(fs.existsSync(path.join(pkg, excluded)), false, `${excluded} must not ship`);
+  }
+
+  // The allowlist is only correct if the installer still works from it.
+  const env = { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: pkg };
+  const installed = run(path.join(pkg, "install.mjs"), [], { env });
+  assert.equal(installed.status, 0, installed.stderr);
+  assert.doesNotMatch(installed.stdout, /^ {2}error/m);
+  const info = JSON.parse(run(path.join(home, "bin", "workloop.mjs"), ["info"], { env }).stdout);
+  assert.equal(info.name, "workloop"); assert.equal(info.runtime_contract, 5);
+  for (const skill of ["loop-core", "workloop", "judgmentloop", "meta-loop"]) {
+    assert.ok(fs.existsSync(path.join(home, ".claude", "skills", skill)), `${skill} must install`);
+  }
+  assert.equal(run(path.join(pkg, "uninstall.mjs"), [], { env }).status, 0);
+  assert.equal(fs.existsSync(path.join(home, "bin", ".workloop-runtime")), false);
+});
