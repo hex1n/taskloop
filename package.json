@@ -2,6 +2,7 @@
   "name": "workloop",
   "version": "0.2.0",
   "description": "Work supervisor and portable loop kernel for coding agents",
+  "license": "UNLICENSED",
   "type": "module",
   "bin": {
     "workloop": "bin/workloop.mjs"

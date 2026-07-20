@@ -257,9 +257,12 @@ test("the published tarball carries exactly what installing needs", (t) => {
 
   // Publishing internal working material is not undoable, so the allowlist is
   // asserted from both directions: what must ship, and what must never.
-  for (const required of ["bin", "lib", "skills", "install.mjs", "uninstall.mjs", "package.json"]) {
+  for (const required of ["bin", "lib", "skills", "install.mjs", "uninstall.mjs", "package.json", "LICENSE"]) {
     assert.ok(fs.existsSync(path.join(pkg, required)), `${required} must ship`);
   }
+  // Publishing without stated terms is the ambiguity the LICENSE file exists to
+  // remove, so the packaged manifest must keep saying so.
+  assert.equal(JSON.parse(fs.readFileSync(path.join(pkg, "package.json"), "utf8")).license, "UNLICENSED");
   for (const excluded of ["docs", "tests", ".scratch", "hooks", "AGENTS.md", "CLAUDE.md"]) {
     assert.equal(fs.existsSync(path.join(pkg, excluded)), false, `${excluded} must not ship`);
   }
