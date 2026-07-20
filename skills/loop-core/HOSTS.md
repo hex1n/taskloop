@@ -1,8 +1,9 @@
 # Host Binding Recipes
 
-taskloop is the stop gate, not the driver: something else asks for another
-round (a human, a recurring goal, a scheduler), and the host decides what a
-session may touch (sandbox). These recipes bind the gate to specific hosts.
+taskloop supervises the work; it never drives it: something else asks for
+another round (a human, a recurring goal, a scheduler), and the host decides
+what a session may touch (sandbox). These recipes bind the runtime's gates —
+write policing and the Stop gate — to specific hosts.
 The original binding mechanics were earned in a live dual-host spike (Claude
 Code 2.1.207, Codex CLI 0.144.1). Hook output support is now explicit per host
 profile because Codex App and Codex CLI cannot be treated as one wire surface.

@@ -32,7 +32,7 @@ Windows compatibility is gated on fixed GitHub-hosted Windows versions with sepa
 
 ## Direction and danger
 
-The runtime is the stop gate: it constrains writes and adjudicates fresh criteria. The bundled skills select and structure loop behavior. Schedulers that trigger another round remain outside this repository.
+The runtime is the work supervisor: it grants scoped write authority, polices writes as they happen, adjudicates fresh criteria, records auditable evidence, and holds the stop gate that refuses release until proof holds. The bundled skills select and structure loop behavior. Schedulers that trigger another round remain outside this repository.
 
 The loop kernel contains the runtime and skills that co-author a core runtime contract: `loop-core`, `workloop`, `judgmentloop`, and `meta-loop`. Skills that only consume an established contract live in their own repositories and compose through `loop-core`; keep the core skill texts free of references to any specific external skill or tool.
 
