@@ -102,6 +102,24 @@ gate working as designed, not a candidate — but draw that reading only from
 covered evidence and valid authority, never from a gapped window. Vocabulary
 candidates go through the same single-candidate handoff below.
 
+## Mine review findings
+
+`queries.reviews` lists each recorded review — level, reviewer, and its
+blocking and advisory finding counts. Blocking findings gate acceptance and
+are resolved by the time a task reaches a terminal outcome; advisory findings
+never gate, so they are the ones that accumulate unread. The usual coverage
+discipline applies: the string `unknown` means absence cannot be established.
+
+Cluster the advisory findings and read them as a standards axis the criterion
+never encoded — the criterion says the work is done, a review advisory says the
+code still drifts from a convention no check enforces. A kind of advisory
+finding recurring across tasks is a candidate: it names a standard worth
+turning into a check or a documented rule, so the loop stops shipping it
+review after review. A one-off advisory on an otherwise clean task is not a
+candidate. The finding count is an observation; which standard a cluster names
+is attended interpretation. Candidates go through the same single-candidate
+handoff below.
+
 ## Protect evidence pointers
 
 Remove repository, session, agent, and personal identifiers from shared prose.

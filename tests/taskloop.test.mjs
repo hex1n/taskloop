@@ -984,6 +984,24 @@ test("ledger exposes per-task terminal write sets for the post-close join", (t) 
   assert.deepEqual(rows[0].files, ["work.txt"]);
 });
 
+test("ledger surfaces recorded reviews with their finding counts for advisory mining", (t) => {
+  const fx = fixture(t);
+  assert.equal(open(fx).status, 0);
+  const reviewed = run(["review", "--repo", fx.repo, "--level", "fresh-context", "--reviewer", "r1", "--blocking-findings", "0", "--advisory-findings", "2"], { env: fx.env });
+  assert.equal(reviewed.status, 0, reviewed.stderr);
+  const ledger = JSON.parse(run(["ledger", "--json", "--repo", fx.repo], { env: fx.env }).stdout);
+  assert.equal(ledger.queries.reviews.length, 1);
+  const row = ledger.queries.reviews[0];
+  assert.equal(row.level, "fresh_context");
+  assert.equal(row.reviewer, "r1");
+  assert.equal(row.blocking_findings_count, 0);
+  assert.equal(row.advisory_findings_count, 2);
+  assert.match(row.reviewed_at, /^\d{4}-\d{2}-\d{2}T/);
+  fs.appendFileSync(path.join(fx.repo, ".taskloop", "events.jsonl"), "{broken\n");
+  const corrupt = JSON.parse(run(["ledger", "--json", "--repo", fx.repo], { env: fx.env }).stdout);
+  assert.equal(corrupt.queries.reviews, "unknown");
+});
+
 test("ledger reports authority-backed user claims as unknown when authority is invalid", (t) => {
   const fx = fixture(t);
   const opened = open(fx, "default", ["--network-allowed", "--granted-by", "user", "--reason", "user approved network authority"]);
