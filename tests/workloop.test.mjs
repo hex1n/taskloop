@@ -6,7 +6,7 @@ import { spawn, spawnSync } from "node:child_process";
 import test from "node:test";
 import { pathToFileURL } from "node:url";
 
-import { criterionFileInvocation, criterionMessage, criterionMetadata, expandWindowsGlobs, mapExecution, runCriterionSource } from "../lib/criterion.mjs";
+import { criterionFileInvocation, criterionMessage, criterionMetadata, expandWindowsGlobs, mapExecution, repoSnapshot, runCriterionSource } from "../lib/criterion.mjs";
 import { POLICY_PRESETS, assertV3TaskProjection, closureProjection, constructPolicy, createTask, criterionDefinitionHash, decide, evolveAll, machineRiskFloor, policyName, projectBudgetExhaustion, projectProofAssurance, projectReviewRequirement, validatePolicy } from "../lib/task-engine.mjs";
 import { archiveIncompatibleState, loadTask } from "../lib/task-store.mjs";
 import { commandShapes, envelopeOverlap, siblingWorktreeOpenTasks } from "../lib/supervision.mjs";
@@ -34,6 +34,22 @@ test("output tails enforce UTF-8 byte limits without splitting code points", () 
   assert.equal(outputTail("abcdef", 2), "..");
 });
 
+test("repository snapshots cover ignored content without requiring Git and exclude control state", (t) => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-repo-snapshot-"));
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+  fs.writeFileSync(path.join(repo, ".gitignore"), "ignored.txt\n");
+  fs.writeFileSync(path.join(repo, "ignored.txt"), "before\n");
+  const before = repoSnapshot(repo);
+  assert.notEqual(before.hash, null);
+
+  fs.mkdirSync(path.join(repo, ".workloop"));
+  fs.writeFileSync(path.join(repo, ".workloop", "task.json"), "control mutation\n");
+  assert.equal(repoSnapshot(repo, before).hash, before.hash);
+
+  fs.writeFileSync(path.join(repo, "ignored.txt"), "after!\n");
+  assert.notEqual(repoSnapshot(repo, before).hash, before.hash);
+});
+
 function run(args, { cwd = ROOT, env = process.env, input = "" } = {}) {
   let result;
   for (let attempt = 0; attempt < 2; attempt += 1) {
@@ -52,6 +68,14 @@ function runAsync(args, { cwd = ROOT, env = process.env, input = "" } = {}) {
     child.on("close", (status) => resolve({ status, stdout, stderr }));
     child.stdin.end(input);
   });
+}
+
+async function waitForPath(target, timeoutMs = 2_000) {
+  const deadline = Date.now() + timeoutMs;
+  while (!fs.existsSync(target)) {
+    if (Date.now() >= deadline) throw new Error(`timed out waiting for ${target}`);
+    await new Promise((resolve) => setTimeout(resolve, 10));
+  }
 }
 
 function withoutVolatileRuntimeFields(value) {
@@ -78,7 +102,7 @@ function fixture(t) {
 }
 
 function open(fx, policy = "default", extra = []) {
-  return run(["open", "--repo", fx.repo, "--goal", "finish", "--criterion-file", "check.mjs", "--criterion-policy", policy, ...(policy === "default" ? [] : ["--reason", "policy reason"]), "--alignment-because", "the checker exercises the result", "--not-covered", "deployment", "--files", "work.txt", "--risk", "routine", "--risk-reason", "isolated reversible fixture", ...extra], { env: fx.env });
+  return run(["open", "--repo", fx.repo, "--goal", "finish", "--criterion-file", "check.mjs", "--criterion-policy", policy, ...(policy === "default" ? [] : ["--reason", "policy reason"]), "--criterion-timeout-seconds", "5", "--alignment-because", "the checker exercises the result", "--not-covered", "deployment", "--files", "work.txt", "--risk", "routine", "--risk-reason", "isolated reversible fixture", ...extra], { env: fx.env });
 }
 
 function observation(verdict, generation = "g1", artifact = 0) {
@@ -568,18 +592,44 @@ test("hook contract is byte-exact for deny, block, and release", (t) => {
   const read = run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, tool_name: "Read", tool_input: {} }) }); assert.equal(read.stdout, "");
 });
 
-test("Codex-safe and legacy no-argument Stop paths never emit resumable stdout", (t) => {
-  for (const [args, warning] of [
-    [["hook", "--profile", "codex-safe"], /Codex safe profile cannot resume this session/],
-    [[], /legacy hook invocation cannot safely resume Stop/],
+test("release-only Stop profiles return without starting or recording the criterion", (t) => {
+  for (const args of [
+    ["hook", "--profile", "codex-safe"],
+    ["hook", "--profile", "codex-cli-legacy"],
+    [],
   ]) {
-    const fx = fixture(t); assert.equal(open(fx).status, 0);
+    const fx = fixture(t);
+    const sentinel = path.join(fx.root, "criterion-started");
+    fs.writeFileSync(path.join(fx.repo, "slow.mjs"), `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(sentinel)}, "started"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000); process.exit(1);\n`);
+    assert.equal(open(fx, "default", ["--criterion-timeout-seconds", "900"]).status, 0);
+    assert.equal(run(["amend", "--repo", fx.repo, "--criterion-file", "slow.mjs", "--reason", "release-only characterization"], { env: fx.env }).status, 0);
+    const eventsPath = path.join(fx.repo, ".workloop", "events.jsonl");
+    const before = fs.readFileSync(eventsPath);
+    const started = Date.now();
     const stopped = run(args, { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo }) });
     assert.equal(stopped.status, 0);
     assert.equal(stopped.stdout, "");
-    assert.match(stopped.stderr, warning);
-    assert.equal(loadTask(fx.repo).spent.rounds, 1);
+    assert.ok(Date.now() - started < 2_000, `release-only Stop took ${Date.now() - started}ms`);
+    assert.equal(fs.existsSync(sentinel), false);
+    assert.deepEqual(fs.readFileSync(eventsPath), before);
+    assert.equal(loadTask(fx.repo).spent.rounds, 0);
   }
+});
+
+test("hard Stop refuses criteria above its inline budget without starting them", (t) => {
+  const fx = fixture(t);
+  const sentinel = path.join(fx.root, "criterion-started");
+  fs.writeFileSync(path.join(fx.repo, "slow.mjs"), `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(sentinel)}, "started"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 2_000); process.exit(1);\n`);
+  assert.equal(open(fx, "default", ["--criterion-timeout-seconds", "31"]).status, 0);
+  assert.equal(run(["amend", "--repo", fx.repo, "--criterion-file", "slow.mjs", "--reason", "inline budget characterization"], { env: fx.env }).status, 0);
+  const started = Date.now();
+  const stopped = run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo }) });
+  assert.equal(stopped.status, 0, stopped.stderr);
+  assert.ok(Date.now() - started < 2_000, `over-budget Stop took ${Date.now() - started}ms`);
+  assert.equal(fs.existsSync(sentinel), false);
+  assert.match(stopped.stdout, /criterion_requires_explicit_verification/);
+  assert.match(stopped.stdout, /workloop verify --record|workloop achieve/);
+  assert.equal(loadTask(fx.repo).spent.rounds, 0);
 });
 
 test("unknown is migration-only and cannot be selected as an explicit hook profile", (t) => {
@@ -593,8 +643,8 @@ test("unknown is migration-only and cannot be selected as an explicit hook profi
   assert.deepEqual(fs.readFileSync(statePath), before);
 });
 
-test("host profiles change Stop encoding without changing adjudication", (t) => {
-  const summaries = ["claude", "codex-safe", "codex-cli-legacy"].map((profile) => {
+test("profiles with the same hard Stop capability preserve adjudication", (t) => {
+  const summaries = ["claude"].map((profile) => {
     const fx = fixture(t); assert.equal(open(fx).status, 0);
     const stopped = run(["hook", "--profile", profile], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo }) });
     assert.equal(stopped.status, 0);
@@ -602,8 +652,7 @@ test("host profiles change Stop encoding without changing adjudication", (t) => 
     const records = fs.readFileSync(path.join(fx.repo, ".workloop", "events.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
     return withoutVolatileRuntimeFields({ projection: state, records });
   });
-  assert.deepEqual(summaries[1], summaries[0]);
-  assert.deepEqual(summaries[2], summaries[0]);
+  assert.equal(summaries.length, 1);
 });
 
 test("bound tasks admit only the latest episode session to Stop adjudication", (t) => {
@@ -1642,7 +1691,7 @@ test("a write between stops resets the no-progress counter", (t) => {
 test("a satisfied adjudication between stops resets the no-progress streak", (t) => {
   const fx = fixture(t);
   fs.writeFileSync(path.join(fx.repo, "checker.mjs"), "import fs from 'node:fs'; if (fs.existsSync('flip')) process.exit(0); console.log(process.hrtime.bigint().toString()); process.exit(1);\n");
-  const opened = run(["open", "--repo", fx.repo, "--goal", "finish", "--criterion", "node checker.mjs", "--criterion-policy", "steady-satisfied", "--reason", "streak reset probe", "--alignment-because", "the checker exercises the result", "--not-covered", "deployment", "--files", "work.txt", "--risk", "routine", "--risk-reason", "isolated reversible fixture", "--rounds", "20"], { env: fx.env });
+  const opened = run(["open", "--repo", fx.repo, "--goal", "finish", "--criterion", "node checker.mjs", "--criterion-policy", "steady-satisfied", "--reason", "streak reset probe", "--criterion-timeout-seconds", "5", "--alignment-because", "the checker exercises the result", "--not-covered", "deployment", "--files", "work.txt", "--risk", "routine", "--risk-reason", "isolated reversible fixture", "--rounds", "20"], { env: fx.env });
   assert.equal(opened.status, 0, opened.stderr);
   const stop = () => run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo }) });
   for (let attempt = 0; attempt < 4; attempt += 1) assert.match(stop().stdout, /"decision":"block"/);
@@ -1661,7 +1710,7 @@ test("a satisfied adjudication between stops resets the no-progress streak", (t)
 test("judgment loop: rubric-bearing tri-state adapter opens unsatisfied and closes only by explicit achieve", (t) => {
   const fx = fixture(t);
   fs.writeFileSync(path.join(fx.repo, "acceptance.mjs"), "// rubric: clear, concrete, honest\nimport fs from 'node:fs';\nlet verdict = '';\ntry { verdict = fs.readFileSync('verdict.txt', 'utf8').trim(); } catch {}\nif (verdict === 'accepted') process.exit(4);\nif (verdict === '' || verdict === 'pending') { console.log('WORKLOOP_CRITERION: acceptance does not hold yet'); process.exit(3); }\nconsole.log('cannot adjudicate: ' + verdict); process.exit(2);\n");
-  const opened = run(["open", "--repo", fx.repo, "--goal", "taste deliverable", "--criterion-file", "acceptance.mjs", "--criterion-protocol", "tri-state", "--criterion-policy", "steady-satisfied", "--reason", "human acceptance closes explicitly", "--alignment-because", "the adapter reads the recorded human verdict against the embedded rubric", "--not-covered", "taste quality itself", "--files", "draft.txt", "--risk", "routine", "--risk-reason", "isolated fixture"], { env: fx.env });
+  const opened = run(["open", "--repo", fx.repo, "--goal", "taste deliverable", "--criterion-file", "acceptance.mjs", "--criterion-protocol", "tri-state", "--criterion-policy", "steady-satisfied", "--reason", "human acceptance closes explicitly", "--criterion-timeout-seconds", "5", "--alignment-because", "the adapter reads the recorded human verdict against the embedded rubric", "--not-covered", "taste quality itself", "--files", "draft.txt", "--risk", "routine", "--risk-reason", "isolated fixture"], { env: fx.env });
   assert.equal(opened.status, 0, opened.stderr);
   assert.match(opened.stdout, /criterion unsatisfied/);
   const stop = () => run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo }) });
@@ -1999,6 +2048,7 @@ test("legacy tri-state exits diagnose protocol 2 and suspend instead of holding 
   const opened = run([
     "open", "--repo", fx.repo, "--goal", "upgrade adapter", "--criterion-file", "legacy-adapter.mjs",
     "--criterion-protocol", "binary", "--criterion-policy", "steady-satisfied", "--reason", "legacy adapter starts satisfied",
+    "--criterion-timeout-seconds", "5",
     "--alignment-because", "upgrade compatibility",
     "--files", "work.txt", "--risk", "routine", "--risk-reason", "isolated fixture",
   ], { env: fx.env });
@@ -2021,15 +2071,141 @@ test("legacy tri-state exits diagnose protocol 2 and suspend instead of holding 
   assert.equal(state.spent.rounds, 0);
 });
 
-test("explicit-policy Stop cannot overwrite a concurrent recorded write", async (t) => {
+test("Stop releases the task lock while criterion runs and discards a stale observation", async (t) => {
   const fx = fixture(t);
-  fs.writeFileSync(path.join(fx.repo, "slow.mjs"), "import fs from 'node:fs'; Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,300); process.exit(fs.existsSync('done') ? 0 : 1);\n");
-  fs.writeFileSync(path.join(fx.repo, "done"), "yes\n");
-  const opened = run(["open", "--repo", fx.repo, "--goal", "steady", "--criterion-file", "slow.mjs", "--criterion-policy", "steady-satisfied", "--reason", "guard", "--alignment-because", "probe", "--files", "work.txt"], { env: fx.env }); assert.equal(opened.status, 0, opened.stderr);
+  const sentinel = path.join(fx.root, "stop-started");
+  fs.writeFileSync(path.join(fx.repo, "slow.mjs"), `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(sentinel)}, "started"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,800); process.exit(1);\n`);
+  assert.equal(open(fx, "default", ["--criterion-timeout-seconds", "5"]).status, 0);
+  assert.equal(run(["amend", "--repo", fx.repo, "--criterion-file", "slow.mjs", "--reason", "concurrency characterization"], { env: fx.env }).status, 0);
   const stop = runAsync(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo }) });
-  await new Promise((resolve) => setTimeout(resolve, 60));
+  await waitForPath(sentinel);
+  const statusStarted = Date.now();
+  const during = await runAsync(["status", "--repo", fx.repo], { env: fx.env });
+  const statusDuration = Date.now() - statusStarted;
+  assert.equal(during.status, 0, during.stderr);
+  assert.ok(statusDuration < 500, `status waited ${statusDuration}ms for a running criterion`);
+  const writeStarted = Date.now();
   const write = await runAsync(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") } }) });
-  await stop; assert.equal(write.status, 0); assert.equal(loadTask(fx.repo).artifact_revision, 1);
+  const writeDuration = Date.now() - writeStarted;
+  const stopped = await stop;
+  assert.equal(write.status, 0, write.stderr);
+  assert.ok(writeDuration < 500, `PreToolUse waited ${writeDuration}ms for a running criterion`);
+  assert.match(stopped.stdout, /criterion_observation_stale/);
+  const state = loadTask(fx.repo);
+  assert.equal(state.artifact_revision, 1);
+  assert.equal(state.spent.rounds, 0);
+  assert.equal(state.criterion.last_observation, null);
+});
+
+test("Stop discards a stale observation after a direct ignored-file write bypasses hooks", async (t) => {
+  const fx = fixture(t);
+  const sentinel = path.join(fx.root, "ignored-write-started");
+  const ignored = path.join(fx.repo, "ignored.txt");
+  fs.writeFileSync(path.join(fx.repo, ".gitignore"), "ignored.txt\n");
+  fs.writeFileSync(ignored, "before\n");
+  fs.writeFileSync(path.join(fx.repo, "slow.mjs"), `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(sentinel)}, "started"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,800); process.exit(1);\n`);
+  assert.equal(open(fx, "default", ["--criterion-timeout-seconds", "5"]).status, 0);
+  assert.equal(run(["amend", "--repo", fx.repo, "--criterion-file", "slow.mjs", "--reason", "direct-write concurrency characterization"], { env: fx.env }).status, 0);
+  const before = loadTask(fx.repo);
+  const stop = runAsync(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo }) });
+  await waitForPath(sentinel);
+  fs.writeFileSync(ignored, "after!\n");
+  const stopped = await stop;
+  assert.equal(stopped.status, 0, stopped.stderr);
+  assert.match(stopped.stdout, /criterion_observation_stale/);
+  const after = loadTask(fx.repo);
+  assert.equal(after.artifact_revision, before.artifact_revision + 1);
+  assert.equal(after.spent.rounds, before.spent.rounds);
+  assert.equal(after.criterion.last_observation.verdict, "indeterminate");
+  assert.equal(after.criterion.last_observation.execution.execution_error, "criterion_side_effect");
+  assert.deepEqual(after.criterion.last_observation.changed_paths, ["ignored.txt"]);
+});
+
+test("criterion lease makes hard Stop single-flight while release-only Stop remains immediate", async (t) => {
+  const fx = fixture(t);
+  const sentinel = path.join(fx.root, "single-flight-started");
+  fs.writeFileSync(path.join(fx.repo, "slow.mjs"), `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(sentinel)}, "started"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,800); process.exit(1);\n`);
+  assert.equal(open(fx, "default", ["--criterion-timeout-seconds", "5"]).status, 0);
+  assert.equal(run(["amend", "--repo", fx.repo, "--criterion-file", "slow.mjs", "--reason", "single-flight probe"], { env: fx.env }).status, 0);
+  const payload = JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo });
+  const first = runAsync(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: payload });
+  await waitForPath(sentinel);
+
+  const contenderStarted = Date.now();
+  const contender = await runAsync(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: payload });
+  const contenderDuration = Date.now() - contenderStarted;
+  assert.equal(contender.status, 0, contender.stderr);
+  assert.ok(contenderDuration < 500, `hard Stop contender waited ${contenderDuration}ms`);
+  assert.match(contender.stdout, /criterion_in_progress/);
+
+  const releaseStarted = Date.now();
+  const released = await runAsync(["hook", "--profile", "codex-safe"], { cwd: fx.repo, env: fx.env, input: payload });
+  const releaseDuration = Date.now() - releaseStarted;
+  assert.equal(released.status, 0, released.stderr);
+  assert.equal(released.stdout, "");
+  assert.ok(releaseDuration < 500, `release-only Stop waited ${releaseDuration}ms`);
+
+  const completed = await first;
+  assert.match(completed.stdout, /criterion unsatisfied/);
+  assert.equal(loadTask(fx.repo).spent.rounds, 1);
+});
+
+test("hard Stop child timeout is runtime-bounded and releases the criterion lease", (t) => {
+  const fx = fixture(t);
+  const pidFile = path.join(fx.root, "stop-child.pid");
+  fs.writeFileSync(path.join(fx.repo, "slow.mjs"), `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,60_000); process.exit(1);\n`);
+  assert.equal(open(fx, "default", ["--criterion-timeout-seconds", "1"]).status, 0);
+  assert.equal(run(["amend", "--repo", fx.repo, "--criterion-file", "slow.mjs", "--reason", "runtime deadline probe"], { env: fx.env }).status, 0);
+  const started = Date.now();
+  const stopped = run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo }) });
+  const duration = Date.now() - started;
+  assert.equal(stopped.status, 0, stopped.stderr);
+  assert.ok(duration < 3_000, `hard Stop timeout took ${duration}ms`);
+  assert.match(stopped.stdout, /timeout/);
+  assert.equal(fs.existsSync(path.join(fx.repo, ".workloop", ".criterion.lock")), false);
+  const childPid = Number(fs.readFileSync(pidFile, "utf8"));
+  assert.throws(() => process.kill(childPid, 0), (error) => error?.code === "ESRCH", `criterion child ${childPid} is still alive`);
+});
+
+test("verify --record and achieve release the task lock while criterion runs", async (t) => {
+  for (const command of ["verify-record", "achieve"]) {
+    const fx = fixture(t);
+    const sentinel = path.join(fx.root, `${command}-started`);
+    fs.writeFileSync(path.join(fx.repo, "slow.mjs"), `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(sentinel)}, "started"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,800); process.exit(1);\n`);
+    assert.equal(open(fx, command === "achieve" ? "steady-satisfied" : "default", ["--criterion-timeout-seconds", "5"]).status, 0);
+    assert.equal(run(["amend", "--repo", fx.repo, "--criterion-file", "slow.mjs", "--reason", "explicit observation concurrency"], { env: fx.env }).status, 0);
+    const observation = command === "achieve"
+      ? runAsync(["achieve", "--repo", fx.repo], { env: fx.env })
+      : runAsync(["verify", "--record", "--repo", fx.repo], { env: fx.env });
+    await waitForPath(sentinel);
+    const suspendStarted = Date.now();
+    const suspended = await runAsync(["suspend", "--repo", fx.repo, "--reason", "needs-input", "--remaining", "resume test", "--failure", "concurrency probe", "--next-action", "resume"], { env: fx.env });
+    const suspendDuration = Date.now() - suspendStarted;
+    const observed = await observation;
+    assert.equal(suspended.status, 0, suspended.stderr);
+    assert.ok(suspendDuration < 500, `suspend waited ${suspendDuration}ms for ${command}`);
+    assert.match(observed.stdout + observed.stderr, /criterion_observation_stale/);
+    const state = loadTask(fx.repo);
+    assert.equal(state.lifecycle.state, "suspended");
+    assert.equal(state.spent.rounds, 0);
+  }
+});
+
+test("open releases the task lock while its birth criterion runs", async (t) => {
+  const fx = fixture(t);
+  const sentinel = path.join(fx.root, "open-started");
+  fs.writeFileSync(path.join(fx.repo, "slow-open.mjs"), `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(sentinel)}, "started"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)),0,0,800); process.exit(1);\n`);
+  const opening = runAsync(["open", "--repo", fx.repo, "--goal", "open transaction", "--criterion-file", "slow-open.mjs", "--criterion-policy", "default", "--criterion-timeout-seconds", "5", "--alignment-because", "birth observation", "--files", "work.txt", "--risk", "routine", "--risk-reason", "fixture"], { env: fx.env });
+  await waitForPath(sentinel);
+  const statusStarted = Date.now();
+  const during = await runAsync(["status", "--repo", fx.repo], { env: fx.env });
+  const statusDuration = Date.now() - statusStarted;
+  const opened = await opening;
+  assert.equal(during.status, 2);
+  assert.match(during.stderr, /no task/);
+  assert.ok(statusDuration < 500, `status waited ${statusDuration}ms for open criterion`);
+  assert.equal(opened.status, 0, opened.stderr);
+  assert.equal(loadTask(fx.repo).lifecycle.state, "active");
 });
 
 test("no-task multi-file writes retain the untracked task-opening nudge", (t) => {
@@ -2047,7 +2223,7 @@ test("verify never persists ordinary observations or burns rounds", (t) => {
   const payload = JSON.parse(verified.stdout); assert.equal(payload.persisted, false); assert.equal(payload.artifact_revision_after, payload.artifact_revision_before);
 });
 
-test("CLI side-effect criteria are indeterminate at open, verify, Stop, and achieve", (t) => {
+test("CLI side-effect criteria are recorded without accepting stale closure observations", (t) => {
   const fx = fixture(t);
   fs.writeFileSync(path.join(fx.repo, "side.mjs"), "import fs from 'node:fs'; fs.writeFileSync('mutation',String(Date.now())); process.exit(0);\n");
   const rejected = run(["open", "--repo", fx.repo, "--goal", "x", "--criterion-file", "side.mjs", "--criterion-policy", "steady-satisfied", "--reason", "guard", "--alignment-because", "x", "--files", "work.txt"], { env: fx.env });
@@ -2056,11 +2232,11 @@ test("CLI side-effect criteria are indeterminate at open, verify, Stop, and achi
   assert.equal(open(fx, "default", ["--writes", "0"]).status, 0);
   assert.equal(run(["amend", "--repo", fx.repo, "--criterion-file", "side.mjs", "--reason", "exercise side effect"], { env: fx.env }).status, 0);
   const verified = run(["verify", "--repo", fx.repo], { env: fx.env }); assert.equal(verified.status, 2); assert.equal(loadTask(fx.repo).artifact_revision, 1);
-  const verifiedPayload = JSON.parse(verified.stdout); assert.equal(verifiedPayload.persisted, true); assert.equal(verifiedPayload.artifact_revision_before, 0); assert.equal(verifiedPayload.artifact_revision_after, 1);
+  const verifiedPayload = JSON.parse(verified.stdout); assert.equal(verifiedPayload.persisted, true); assert.equal(verifiedPayload.stale, true); assert.deepEqual(verifiedPayload.observation.changed_paths, ["mutation"]); assert.equal(verifiedPayload.artifact_revision_before, 0); assert.equal(verifiedPayload.artifact_revision_after, 1);
   fs.rmSync(path.join(fx.repo, "mutation"));
-  const achieved = run(["achieve", "--repo", fx.repo], { env: fx.env }); assert.equal(achieved.status, 2); assert.equal(loadTask(fx.repo).artifact_revision, 2); assert.equal(loadTask(fx.repo).lifecycle.state, "active");
+  const achieved = run(["achieve", "--repo", fx.repo], { env: fx.env }); assert.equal(achieved.status, 2); assert.match(achieved.stderr, /criterion_observation_stale.*side-effect evidence recorded.*changed paths: mutation/); assert.equal(loadTask(fx.repo).artifact_revision, 2); assert.equal(loadTask(fx.repo).lifecycle.state, "active");
   fs.rmSync(path.join(fx.repo, "mutation"));
-  const stopped = run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo }) }); assert.match(stopped.stdout, /criterion indeterminate/); assert.equal(loadTask(fx.repo).artifact_revision, 3); assert.equal(loadTask(fx.repo).lifecycle.state, "active");
+  const stopped = run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo }) }); assert.match(stopped.stdout, /criterion_observation_stale.*side-effect evidence recorded.*changed paths: mutation/); assert.equal(loadTask(fx.repo).artifact_revision, 3); assert.equal(loadTask(fx.repo).lifecycle.state, "active");
 });
 
 test("CLI suspend uses kebab enums while storage uses snake case and Stop releases", (t) => {

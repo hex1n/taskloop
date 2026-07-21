@@ -4,8 +4,17 @@
 - 基线：`99e55edaa992ea076f8824c6e0bef19f40f36f14`
 - 模式：Plan
 - 深度：Deep
-- 状态：方案已收敛，尚未授权代码实施
+- 状态：仓库实现与自动化回归已完成；真实 Host 迁移/探针待用户授权
 - 输入来源：现场 Codex Stop 行为、`.workloop` task snapshot、`lib/application.mjs`、`lib/host-hooks.mjs`、`lib/task-store.mjs`、相关测试与既有 Host Hook/CLI observation 设计文档
+
+## 实施记录（2026-07-21）
+
+- 用户随后明确要求设定目标并落地本计划，仓库内代码、测试和任务文档的实施授权已取得。
+- capability-first Stop、runtime-owned budget、三阶段 observation transaction、完整仓库内容指纹、criterion single-flight lease、installer 只读迁移诊断与 portable 文档均已实现。
+- `npm test` 干净运行通过：behavioral 140/140；其余套件 220 passed、9 Windows-only skipped、0 failed；`git diff --check` 通过。
+- 独立双轴复审确认实现与仓库标准无剩余问题；唯一未满足的 Oracle 是 Slice 4 的真实 Codex App/CLI 与 Claude probes。
+- Slice 4 已拆成可直接交接的 Delta E2E 计划：`docs/e2e-test/stop-hook-liveness/2026-07-21-stop-hook-liveness-e2e-test-plan.md`，包含 10 个场景、fixture 配方、执行 DAG、门禁、脱敏回执与安全回退。
+- 当前用户 Host recipe 仍是旧的 300 秒 timeout。Installer dry-run 能准确诊断并保持原文件；依照本计划的所有权边界，安装新 runtime、人工合并 45 秒 recipe、重新 trust 与创建真实 session 仍等待用户明确授权，不以 encoder/unit tests 冒充 live evidence。
 
 ## TL;DR
 

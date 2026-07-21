@@ -166,6 +166,65 @@ test("Windows criterion timeout terminates the child and returns promptly", { sk
   else assert.throws(() => process.kill(childPid, 0), (error) => error?.code === "ESRCH", `criterion child ${childPid} is still alive`);
 });
 
+test("[W06] Windows codex-safe Stop releases without launching a long criterion", { skip: !WINDOWS }, (t) => {
+  const fixture = installedFixture(t);
+  const repo = path.join(fixture.root, "release-only repo");
+  fs.mkdirSync(repo, { recursive: true });
+  assert.equal(spawnSync("git", ["init", "-q"], { cwd: repo }).status, 0);
+  const sentinel = path.join(fixture.root, "release-only.started");
+  fs.writeFileSync(path.join(repo, "check.mjs"), "process.exit(1);\n");
+  fs.writeFileSync(path.join(repo, "slow.mjs"), `import fs from "node:fs"; fs.writeFileSync(${JSON.stringify(sentinel)}, "started"); Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 60_000); process.exit(1);\n`);
+  fs.writeFileSync(path.join(repo, "work.txt"), "start\n");
+  const opened = runNode(fixture.shim, ["open", "--repo", repo, "--goal", "release", "--criterion-file", "check.mjs", "--criterion-policy", "default", "--criterion-timeout-seconds", "900", "--alignment-because", "release-only probe", "--files", "work.txt", "--risk", "routine", "--risk-reason", "fixture"], { cwd: repo, env: fixture.env });
+  assert.equal(opened.status, 0, opened.stderr || opened.stdout);
+  const amended = runNode(fixture.shim, ["amend", "--repo", repo, "--criterion-file", "slow.mjs", "--reason", "long criterion probe"], { cwd: repo, env: fixture.env });
+  assert.equal(amended.status, 0, amended.stderr || amended.stdout);
+
+  const started = Date.now();
+  const stopped = runNode(fixture.shim, ["hook", "--profile", "codex-safe"], { cwd: repo, env: fixture.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: repo }), timeout: 5_000 });
+  assert.equal(stopped.status, 0, stopped.stderr || stopped.stdout);
+  assert.equal(stopped.stdout, "");
+  assert.ok(Date.now() - started < 2_000, `release-only Stop took ${Date.now() - started}ms`);
+  assert.equal(fs.existsSync(sentinel), false);
+  const state = JSON.parse(fs.readFileSync(path.join(repo, ".workloop", "task.json"), "utf8")).projection;
+  assert.equal(state.spent.rounds, 0);
+  assert.equal(state.criterion.last_observation, null);
+});
+
+test("[W06] Windows criterion lease waits for a dead owner's declared deadline before recovery", { skip: !WINDOWS }, (t) => {
+  const fixture = installedFixture(t);
+  const repo = path.join(fixture.root, "criterion lease repo");
+  fs.mkdirSync(repo, { recursive: true });
+  assert.equal(spawnSync("git", ["init", "-q"], { cwd: repo }).status, 0);
+  fs.writeFileSync(path.join(repo, "check.mjs"), "process.exit(1);\n");
+  fs.writeFileSync(path.join(repo, "work.txt"), "start\n");
+  const opened = runNode(fixture.shim, ["open", "--repo", repo, "--goal", "lease", "--criterion-file", "check.mjs", "--criterion-policy", "default", "--criterion-timeout-seconds", "5", "--alignment-because", "lease probe", "--files", "work.txt", "--risk", "routine", "--risk-reason", "fixture"], { cwd: repo, env: fixture.env });
+  assert.equal(opened.status, 0, opened.stderr || opened.stdout);
+
+  const exited = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" });
+  assert.equal(exited.status, 0, exited.stderr);
+  const lock = path.join(repo, ".workloop", ".criterion.lock");
+  fs.mkdirSync(lock);
+  const now = Date.now();
+  const owner = { pid: Number(exited.stdout), token: "dead-owner", intent: "verify_record", started_at_epoch_ms: now - 60_000, deadline_epoch_ms: now + 60_000 };
+  fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify(owner));
+  const old = new Date(now - 60_000);
+  fs.utimesSync(lock, old, old);
+  const payload = JSON.stringify({ hook_event_name: "Stop", cwd: repo });
+  let stopped = runNode(fixture.shim, ["hook", "--profile", "claude"], { cwd: repo, env: fixture.env, input: payload });
+  assert.equal(stopped.status, 0, stopped.stderr || stopped.stdout);
+  assert.match(stopped.stdout, /criterion_in_progress/);
+  assert.equal(fs.existsSync(lock), true);
+
+  owner.deadline_epoch_ms = now - 20_000;
+  fs.writeFileSync(path.join(lock, "owner.json"), JSON.stringify(owner));
+  fs.utimesSync(lock, old, old);
+  stopped = runNode(fixture.shim, ["hook", "--profile", "claude"], { cwd: repo, env: fixture.env, input: payload });
+  assert.equal(stopped.status, 0, stopped.stderr || stopped.stdout);
+  assert.match(stopped.stdout, /criterion unsatisfied/);
+  assert.equal(fs.existsSync(lock), false);
+});
+
 test("Windows installer reaps a stale lock owned by an exited process", { skip: !WINDOWS }, (t) => {
   const fixture = installFixture(t);
   const exited = spawnSync(process.execPath, ["-e", "process.stdout.write(String(process.pid))"], { encoding: "utf8" });
