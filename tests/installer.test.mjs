@@ -227,6 +227,7 @@ test("uninstall removes what it installed and preserves what it cannot prove is 
   assert.match(fs.readFileSync(handShim, "utf8"), /hand written/);
   assert.ok(fs.existsSync(path.join(ledger, "outcomes.jsonl")), "the outcome ledger is not an install artifact");
   assert.match(removed.stdout, /is not a workloop-generated shim; preserved/);
+  assert.match(removed.stdout, /changed since workloop installed it; preserved/);
   assert.match(removed.stdout, /--purge-ledger/);
 
   // Rerunning is a no-op, and --purge-ledger is the explicit opt-in.
@@ -246,13 +247,89 @@ test("uninstall on a home that never installed workloop changes nothing", (t) =>
   assert.equal(run(path.join(ROOT, "uninstall.mjs"), ["--bogus"], { env: { ...process.env, WORKLOOP_INSTALL_HOME: home } }).status, 2);
 });
 
+test("uninstall preserves foreign content wearing workloop names", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-uninstall-foreign-")); const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // A home that never installed workloop but holds same-named foreign
+  // content: a runtime directory with real work in it, an empty directory
+  // named after the empty-set hash, control files that carry the right
+  // version discriminator but not the written shape, and a skill tree wearing
+  // a shipped skill name with no manifest record. Nothing here is provably
+  // ours, so nothing may be deleted and everything must be reported.
+  const bin = path.join(home, "bin");
+  const notes = path.join(bin, ".workloop-runtime", "notes");
+  fs.mkdirSync(notes, { recursive: true });
+  fs.writeFileSync(path.join(notes, "todo.txt"), "keep me\n");
+  fs.mkdirSync(path.join(bin, ".workloop-runtime", "e3b0c44298fc"), { recursive: true });
+  // Each control file carries the right version discriminator but not the
+  // written shape, so a validator relaxed back to discriminator-only for any
+  // one of them deletes that file and fails this test.
+  fs.writeFileSync(path.join(bin, ".workloop-managed-skills.json"), JSON.stringify({ version: 2, runtimes: [] }) + "\n");
+  fs.writeFileSync(path.join(bin, ".workloop-active-release.json"), JSON.stringify({ release_manifest_version: 1 }) + "\n");
+  fs.writeFileSync(path.join(bin, ".workloop-activation-journal.json"), JSON.stringify({ journal_version: 1, steps: {} }) + "\n");
+  const squatter = path.join(home, ".claude", "skills", "workloop");
+  fs.mkdirSync(squatter, { recursive: true });
+  fs.writeFileSync(path.join(squatter, "SKILL.md"), "not the managed tree\n");
+  const result = run(path.join(ROOT, "uninstall.mjs"), [], { env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home } });
+  assert.equal(result.status, 0, result.stderr);
+  assert.match(result.stdout, /0 remove/);
+  assert.ok(fs.existsSync(path.join(notes, "todo.txt")), "foreign runtime content survives");
+  assert.ok(fs.existsSync(path.join(bin, ".workloop-runtime", "e3b0c44298fc")), "an empty tree can never be proven ours");
+  for (const kept of [".workloop-managed-skills.json", ".workloop-active-release.json", ".workloop-activation-journal.json"]) {
+    assert.ok(fs.existsSync(path.join(bin, kept)), `${kept} survives`);
+  }
+  assert.ok(fs.existsSync(path.join(squatter, "SKILL.md")), "a same-named tree without a manifest record survives");
+  assert.match(result.stdout, /is not a workloop-installed runtime version; preserved/);
+  assert.match(result.stdout, /kept: it still holds entries workloop cannot prove it installed/);
+  assert.match(result.stdout, /does not match the shape workloop writes; preserved/);
+  assert.match(result.stdout, /wears a workloop skill name but the manifest cannot prove workloop installed it; preserved/);
+  // Unparseable is preserved through the same door as wrong-shaped.
+  fs.writeFileSync(path.join(bin, ".workloop-activation-journal.json"), "not json\n");
+  const again = run(path.join(ROOT, "uninstall.mjs"), [], { env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home } });
+  assert.equal(again.status, 0, again.stderr);
+  assert.match(again.stdout, /0 remove/);
+  assert.ok(fs.existsSync(path.join(bin, ".workloop-activation-journal.json")), "unparseable journal survives");
+});
+
+test("uninstall preserves a runtime version carrying a stowaway", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-uninstall-stowaway-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  // Anything the owner put inside the versioned runtime — a file, or an empty
+  // directory the hash cannot see — is work the proof no longer covers: the
+  // whole version directory must survive either way.
+  const plants = {
+    file: (version) => { const p = path.join(version, "notes.txt"); fs.writeFileSync(p, "irreplaceable\n"); return p; },
+    "empty-dir": (version) => { const p = path.join(version, "keepsake"); fs.mkdirSync(p); return p; },
+  };
+  for (const [variant, plant] of Object.entries(plants)) {
+    const home = path.join(root, variant);
+    const env = { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT };
+    assert.equal(run(path.join(ROOT, "install.mjs"), [], { env }).status, 0);
+    const runtimeRoot = path.join(home, "bin", ".workloop-runtime");
+    const version = fs.readdirSync(runtimeRoot).filter((name) => /^[0-9a-f]{12}$/.test(name))[0];
+    const stowaway = plant(path.join(runtimeRoot, version));
+    const removed = run(path.join(ROOT, "uninstall.mjs"), [], { env });
+    assert.equal(removed.status, 0, removed.stderr);
+    assert.ok(fs.existsSync(stowaway), `${variant}: the stowaway survives with its directory`);
+    assert.match(removed.stdout, /is not a workloop-installed runtime version; preserved/);
+    assert.match(removed.stdout, /kept: it still holds entries workloop cannot prove it installed/);
+    // Everything provable still leaves: shims and control files are gone.
+    for (const gone of ["workloop.mjs", "workloop.cmd", ".workloop-managed-skills.json", ".workloop-active-release.json"]) {
+      assert.equal(fs.existsSync(path.join(home, "bin", gone)), false, `${variant}: ${gone} should be removed`);
+    }
+  }
+});
+
 test("the published tarball carries exactly what installing needs", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-pack-")); const home = path.join(root, "home");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
-  const packed = spawnSync("npm", ["pack", "--pack-destination", root], { cwd: ROOT, encoding: "utf8" });
+  // npm is npm.cmd on Windows, which a bare spawn cannot resolve under Node 22.
+  const packed = spawnSync("npm", ["pack", "--pack-destination", root], { cwd: ROOT, encoding: "utf8", shell: process.platform === "win32" });
   assert.equal(packed.status, 0, packed.stderr);
-  const tarball = path.join(root, packed.stdout.trim().split("\n").at(-1));
-  assert.equal(spawnSync("tar", ["-xzf", tarball, "-C", root], { encoding: "utf8" }).status, 0);
+  // Extract with a relative path from inside root: GNU tar reads a drive-colon
+  // absolute path as a remote host, and bsdtar has no --force-local escape.
+  const tarball = packed.stdout.trim().split("\n").at(-1);
+  assert.equal(spawnSync("tar", ["-xzf", tarball], { cwd: root, encoding: "utf8" }).status, 0);
   const pkg = path.join(root, "package");
 
   // Publishing internal working material is not undoable, so the allowlist is

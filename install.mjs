@@ -79,6 +79,39 @@ function runtimeHash(files) {
   return hash.digest("hex").slice(0, 12);
 }
 
+// The full installed tree, not just bin/ and lib/: anything smuggled into a
+// version directory — a file, an empty directory, a symlink — must break the
+// ownership proof rather than ride along into deletion. A pristine install
+// contains exactly the runtimeFiles set with directories created only as
+// file parents, so the proof holds there and nowhere else.
+function installedRuntimeVersionProvable(root, name) {
+  let entries;
+  try {
+    entries = treeManifest(root);
+  } catch {
+    return false;
+  }
+  const files = entries.filter((entry) => entry.type === "file")
+    .map((entry) => ({ file: entry.file, relative: entry.relative.replace(/\\/g, "/") }))
+    .sort((a, b) => a.relative.localeCompare(b.relative));
+  if (!files.length) return false;
+  const fileParents = new Set();
+  for (const { relative } of files) {
+    for (let parent = path.dirname(relative); parent && parent !== "."; parent = path.dirname(parent)) fileParents.add(parent.replace(/\\/g, "/"));
+  }
+  for (const entry of entries) {
+    if (entry.type === "directory" && !fileParents.has(entry.relative.replace(/\\/g, "/"))) return false;
+  }
+  return runtimeHash(files) === name;
+}
+
+function sourceSkillNames(repo) {
+  return fs.readdirSync(path.join(repo, "skills"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+}
+
 function sameContent(left, right) {
   try {
     return fs.readFileSync(left).equals(fs.readFileSync(right));
@@ -691,10 +724,7 @@ export function legacySkillCanBeAdopted(skill, actualDigest, legacyNamed, curren
 
 function installWorkloopAssetsUnlocked(repo, home, dry) {
   const skillsRoot = path.join(repo, "skills");
-  const skills = fs.readdirSync(skillsRoot, { withFileTypes: true })
-    .filter((entry) => entry.isDirectory())
-    .map((entry) => entry.name)
-    .sort();
+  const skills = sourceSkillNames(repo);
   const manifest = path.join(home, "bin", ".workloop-managed-skills.json");
   const previousState = readManagedSkills(manifest);
   const previous = previousState.runtimes;
@@ -702,19 +732,7 @@ function installWorkloopAssetsUnlocked(repo, home, dry) {
   const sourceDigests = Object.fromEntries(
     skills.map((skill) => [skill, managedTreeDigest(path.join(skillsRoot, skill))]),
   );
-  const groups = new Map();
-  for (const runtime of [".claude", ".codex"]) {
-    const root = path.join(home, runtime, "skills");
-    let key;
-    try {
-      key = fs.realpathSync(root);
-    } catch {
-      key = path.resolve(root);
-    }
-    if (!groups.has(key)) groups.set(key, { root, runtimes: [] });
-    groups.get(key).runtimes.push(runtime);
-  }
-  for (const { root, runtimes } of groups.values()) {
+  for (const { root, runtimes } of skillRootGroups(home).values()) {
     const groupPrevious = {};
     const conflicts = new Set();
     for (const runtime of runtimes) {
@@ -793,9 +811,53 @@ const SHIM_SHAPES = {
   "workloop.ps1": /^\$script = Join-Path \$PSScriptRoot 'workloop\.mjs'\r\n& node \$script @args\r\nexit \$LASTEXITCODE\r\n$/,
 };
 
+// The exact shapes install.mjs writes — the full field set and value domains
+// of each writer, not just a version discriminator, or a foreign file that
+// happens to carry the right discriminator would be deleted as ours. Kept in
+// lockstep with readManagedSkills, the manifestRow, and the journalRow in
+// installWorkloop; a file another release wrote differently is preserved,
+// which costs one manual rm and never loses work.
+const isPlainObject = (value) => Boolean(value) && typeof value === "object" && !Array.isArray(value);
+const RUNTIME_HASH_SHAPE = /^[0-9a-f]{12}$/;
+const TREE_DIGEST_SHAPE = /^[0-9a-f]{64}$/;
+const SKILL_NAME_SHAPE = /^[a-z0-9][a-z0-9-]*$/;
+const JOURNAL_STEP_KEYS = "manifest_committed,runtime_staged,shim_activated,skills_activated";
+const CONTROL_FILE_SHAPES = {
+  ".workloop-managed-skills.json": (parsed) =>
+    (parsed?.version === 1 && Array.isArray(parsed.skills)
+      && parsed.skills.every((name) => typeof name === "string" && SKILL_NAME_SHAPE.test(name)))
+    || (parsed?.version === 2 && isPlainObject(parsed.runtimes)
+      && Object.keys(parsed.runtimes).sort().join(",") === ".claude,.codex"
+      && Object.values(parsed.runtimes).every((skills) => isPlainObject(skills)
+        && Object.entries(skills).every(([name, digest]) => SKILL_NAME_SHAPE.test(name) && typeof digest === "string" && TREE_DIGEST_SHAPE.test(digest)))),
+  ".workloop-active-release.json": (parsed) => isPlainObject(parsed)
+    && parsed.release_manifest_version === 1
+    && typeof parsed.release_id === "string" && RUNTIME_HASH_SHAPE.test(parsed.release_id)
+    && Number.isInteger(parsed.runtime_contract) && parsed.runtime_contract > 0
+    && typeof parsed.runtime_digest === "string" && RUNTIME_HASH_SHAPE.test(parsed.runtime_digest)
+    && (parsed.managed_skills_manifest_digest === null
+      || (typeof parsed.managed_skills_manifest_digest === "string" && TREE_DIGEST_SHAPE.test(parsed.managed_skills_manifest_digest))),
+  ".workloop-activation-journal.json": (parsed) => isPlainObject(parsed)
+    && parsed.journal_version === 1
+    && typeof parsed.release_id === "string" && RUNTIME_HASH_SHAPE.test(parsed.release_id)
+    && Number.isInteger(parsed.runtime_contract) && parsed.runtime_contract > 0
+    && ["activating", "committed", "needs_manual_intervention"].includes(parsed.status)
+    && isPlainObject(parsed.steps)
+    && Object.keys(parsed.steps).sort().join(",") === JOURNAL_STEP_KEYS
+    && Object.values(parsed.steps).every((step) => typeof step === "boolean"),
+};
+
 function uninstallWorkloopUnlocked(home, dry, { purgeLedger }) {
   const binRoot = path.join(home, "bin");
   const state = readManagedSkills(path.join(binRoot, ".workloop-managed-skills.json"));
+  let knownSkills = [];
+  try {
+    knownSkills = sourceSkillNames(SOURCE);
+  } catch {
+    // Degrading same-name reporting must itself be reported, or a lost
+    // skills/ directory silently reopens the unreported-preservation hole.
+    plan("warning", `${path.join(SOURCE, "skills")} is not readable; same-named skill trees cannot be checked and may remain unreported`);
+  }
 
   for (const { root, runtimes } of skillRootGroups(home).values()) {
     const expected = {};
@@ -814,11 +876,20 @@ function uninstallWorkloopUnlocked(home, dry, { purgeLedger }) {
       const target = path.join(root, skill);
       if (!pathPresent(target)) continue;
       if (managedTreeDigest(target) !== digest) {
-        plan("ok", `${target} (changed since workloop installed it; preserved)`);
+        plan("warning", `${target} changed since workloop installed it; preserved`);
         continue;
       }
       plan("remove", target);
       if (!dry) fs.rmSync(target, { recursive: true, force: true });
+    }
+    // A tree wearing a shipped skill name with no provable manifest record is
+    // exactly the case "preserved and reported" exists for: without this line
+    // a home whose manifest was lost or foreign keeps the tree in silence.
+    for (const skill of knownSkills) {
+      if (skill in expected || conflicts.has(skill)) continue;
+      const target = path.join(root, skill);
+      if (!pathPresent(target)) continue;
+      plan("warning", `${target} wears a workloop skill name but the manifest cannot prove workloop installed it; preserved`);
     }
   }
 
@@ -840,11 +911,56 @@ function uninstallWorkloopUnlocked(home, dry, { purgeLedger }) {
     if (!dry) fs.rmSync(target, { force: true });
   }
 
-  for (const name of [".workloop-runtime", ".workloop-managed-skills.json", ".workloop-active-release.json", ".workloop-activation-journal.json"]) {
+  // Ownership proof, not name matching: a runtime version is ours iff its
+  // content hash still equals its directory name (the installer's own naming
+  // scheme), and a control file is ours iff it still parses as the shape
+  // workloop writes. Anything else at these paths is foreign content wearing
+  // a workloop name and is preserved.
+  const runtimeRoot = path.join(binRoot, ".workloop-runtime");
+  if (pathPresent(runtimeRoot)) {
+    let entries = null;
+    try {
+      entries = fs.readdirSync(runtimeRoot, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
+    } catch {
+      plan("warning", `${runtimeRoot} is not a readable directory; preserved`);
+    }
+    if (entries) {
+      let preserved = false;
+      for (const entry of entries) {
+        const target = path.join(runtimeRoot, entry.name);
+        const provable = entry.isDirectory() && installedRuntimeVersionProvable(target, entry.name);
+        if (!provable) {
+          preserved = true;
+          plan("warning", `${target} is not a workloop-installed runtime version; preserved`);
+          continue;
+        }
+        plan("remove", target);
+        if (!dry) fs.rmSync(target, { recursive: true, force: true });
+      }
+      if (preserved) {
+        plan("warning", `${runtimeRoot} kept: it still holds entries workloop cannot prove it installed`);
+      } else {
+        plan("remove", runtimeRoot);
+        if (!dry) fs.rmSync(runtimeRoot, { recursive: true, force: true });
+      }
+    }
+  }
+
+  for (const [name, matchesWrittenShape] of Object.entries(CONTROL_FILE_SHAPES)) {
     const target = path.join(binRoot, name);
     if (!pathPresent(target)) continue;
+    let parsed;
+    try {
+      parsed = JSON.parse(fs.readFileSync(target, "utf8"));
+    } catch {
+      parsed = undefined;
+    }
+    if (!matchesWrittenShape(parsed)) {
+      plan("warning", `${target} does not match the shape workloop writes; preserved`);
+      continue;
+    }
     plan("remove", target);
-    if (!dry) fs.rmSync(target, { recursive: true, force: true });
+    if (!dry) fs.rmSync(target, { force: true });
   }
 
   // The HOME outcome ledger is the owner's audit history, not an install
