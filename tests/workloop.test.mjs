@@ -479,13 +479,14 @@ test("command criteria refuse missing executables as indeterminate", (t) => {
 test("an open the reducer would reject commits no event and leaves the repository usable", (t) => {
   const fx = fixture(t);
   const ledger = path.join(fx.repo, ".workloop", "events.jsonl");
+  fs.writeFileSync(path.join(fx.repo, "satisfied.mjs"), "process.exit(0);\n");
   const rejected = [
     // Indeterminate criterion: the adapter could not produce a verdict.
     { args: ["--criterion", "definitely-not-a-command-xyz", "--criterion-policy", "default"], reason: /criterion indeterminate/i },
     // Satisfied at open under a policy that requires unsatisfied. Same shape,
     // different check inside createTask -- which is why the decider runs the
     // reducer rather than restating any single condition.
-    { args: ["--criterion", `${JSON.stringify(process.execPath)} -e "process.exit(0)"`, "--criterion-policy", "default"], reason: /requires criterion unsatisfied/i },
+    { args: ["--criterion-file", "satisfied.mjs", "--criterion-policy", "default"], reason: /requires criterion unsatisfied/i },
   ];
   for (const { args, reason } of rejected) {
     const opened = run(["open", "--repo", fx.repo, "--goal", "probe", ...args, "--alignment-because", "probe", "--files", "work.txt"], { env: fx.env });
