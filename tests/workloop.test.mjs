@@ -1258,10 +1258,11 @@ test("session-scoped PreToolUse protects control state and gates foreign writes 
   const fx = fixture(t); const ownerEnv = { ...fx.env, WORKLOOP_SESSION_ID: "owner-session" };
   assert.equal(open({ ...fx, env: ownerEnv }).status, 0);
   const hook = (session_id, tool_name, tool_input) => run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, session_id, tool_name, tool_input }) });
+  const bashPath = (value) => value.replaceAll("\\", "/");
   const ownerControl = hook("owner-session", "Write", { file_path: path.join(fx.repo, ".workloop", "task.json") });
   assert.match(ownerControl.stdout, /permissionDecision.*deny/); assert.match(ownerControl.stdout, /control state/);
   assert.equal(hook("owner-session", "Read", { file_path: path.join(fx.repo, ".workloop", "task.json") }).stdout, "");
-  const foreignControl = hook("foreign-session", "Bash", { command: `echo bad > ${path.join(fx.repo, ".git", "config")}` });
+  const foreignControl = hook("foreign-session", "Bash", { command: `echo bad > ${bashPath(path.join(fx.repo, ".git", "config"))}` });
   assert.match(foreignControl.stdout, /permissionDecision.*deny/);
   const homeControl = hook("owner-session", "Write", { file_path: path.join(fx.home, ".workloop", "outcomes.jsonl") });
   assert.match(homeControl.stdout, /permissionDecision.*deny/);
@@ -1271,7 +1272,7 @@ test("session-scoped PreToolUse protects control state and gates foreign writes 
   assert.match(inside.stdout, /permissionDecision.*deny/); assert.match(inside.stdout, /workloop join/);
   const unknown = hook("foreign-session", "Bash", { command: "sed -i.bak s/a/b/ work.txt" });
   assert.match(unknown.stdout, /permissionDecision.*deny/); assert.match(unknown.stdout, /resolve the write target/);
-  const mixed = hook("foreign-session", "Bash", { command: `sed -i.bak s/a/b/ work.txt && echo x > ${path.join(fx.root, "outside.txt")}` });
+  const mixed = hook("foreign-session", "Bash", { command: `sed -i.bak s/a/b/ work.txt && echo x > ${bashPath(path.join(fx.root, "outside.txt"))}` });
   assert.match(mixed.stdout, /permissionDecision.*deny/); assert.match(mixed.stdout, /resolve the write target/);
   const changedDirectory = hook("foreign-session", "Bash", { command: "cd nested && echo x > relative.txt" });
   assert.match(changedDirectory.stdout, /permissionDecision.*deny/); assert.match(changedDirectory.stdout, /directory change/);
@@ -1311,8 +1312,8 @@ test("session-scoped PreToolUse protects control state and gates foreign writes 
   assert.match(hook("foreign-session", "Bash", { command: "wget https://example.invalid/x" }).stdout, /permissionDecision.*deny/);
   assert.match(hook("foreign-session", "Bash", { command: "curl -o work.txt https://example.invalid/x" }).stdout, /permissionDecision.*deny/);
   assert.match(hook("foreign-session", "Bash", { command: "curl -owork.txt https://example.invalid/x" }).stdout, /permissionDecision.*deny/);
-  assert.equal(hook("foreign-session", "Bash", { command: `curl -o ${path.join(fx.root, "curl-out.txt")} https://example.invalid/x` }).stdout, "");
-  assert.equal(hook("foreign-session", "Bash", { command: `curl -o${path.join(fx.root, "curl-compact.txt")} https://example.invalid/x` }).stdout, "");
+  assert.equal(hook("foreign-session", "Bash", { command: `curl -o ${bashPath(path.join(fx.root, "curl-out.txt"))} https://example.invalid/x` }).stdout, "");
+  assert.equal(hook("foreign-session", "Bash", { command: `curl -o${bashPath(path.join(fx.root, "curl-compact.txt"))} https://example.invalid/x` }).stdout, "");
   assert.match(hook("foreign-session", "PowerShell", { command: "Invoke-WebRequest https://example.invalid/x -OutFile work.txt" }).stdout, /permissionDecision.*deny/);
   assert.match(hook("foreign-session", "PowerShell", { command: "Invoke-WebRequest https://example.invalid/x -OutFile:work.txt" }).stdout, /permissionDecision.*deny/);
   const grants = run(["amend", "--repo", fx.repo, "--network-allowed", "--destructive-allowed", "--install-scripts-allowed", "--granted-by", "user", "--reason", "owner-only authority"], { env: ownerEnv });
