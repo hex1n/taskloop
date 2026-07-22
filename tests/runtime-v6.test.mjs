@@ -350,6 +350,26 @@ test("PreToolUse and PostToolUse persist one correlated operation and landed art
   assert.equal(projection.evidence.tool_completions_observed, 1);
   assert.equal(projection.artifact_revision, 1);
   assert.deepEqual(projection.evidence.touched_files, ["work.txt"]);
+
+  const run = (args) => spawnSync(process.execPath, [CLI, ...args], { cwd: repo, env, encoding: "utf8" });
+  const status = JSON.parse(run(["status", "--repo", repo]).stdout);
+  assert.deepEqual({
+    writes: status.write_evidence.write_operations_authorized,
+    completions: status.write_evidence.tool_completions_observed,
+    artifact_revisions: status.write_evidence.artifact_revision,
+    artifact_coverage: status.write_evidence.artifact_state_coverage,
+    history_coverage: status.write_evidence.mutation_history_coverage,
+  }, { writes: 1, completions: 1, artifact_revisions: 1, artifact_coverage: "full", history_coverage: "unknown" });
+  const report = JSON.parse(run(["report", "--repo", repo, "--json"]).stdout);
+  assert.equal(report.write_evidence.write_count_basis, "authorized");
+  const ledger = JSON.parse(run(["ledger", "--repo", repo, "--json"]).stdout);
+  assert.deepEqual({
+    writes: ledger.metrics.writes,
+    basis: ledger.metrics.write_count_basis,
+    completions: ledger.metrics.tool_completions,
+    artifact_changes: ledger.metrics.artifact_changes,
+    touched: ledger.metrics.touched_files,
+  }, { writes: 1, basis: "authorized", completions: 1, artifact_changes: 1, touched: 1 });
 });
 
 test("achieved and not-needed share Contract 6 artifact assurance", () => {
