@@ -54,6 +54,19 @@ function runGit(cwd, args, expected = 0) {
   return result.stdout.trim();
 }
 
+function replaceExistingFile(target, value) {
+  const bytes = Buffer.isBuffer(value) ? value : Buffer.from(value);
+  const fd = fs.openSync(target, "r+");
+  try {
+    fs.ftruncateSync(fd, 0);
+    let offset = 0;
+    while (offset < bytes.length) offset += fs.writeSync(fd, bytes, offset, bytes.length - offset, offset);
+    fs.fsyncSync(fd);
+  } finally {
+    fs.closeSync(fd);
+  }
+}
+
 function encoded(value) {
   return Buffer.from(JSON.stringify(value)).toString("base64url");
 }
@@ -551,16 +564,16 @@ test("[MAR-ADAPTER] Git common authority survives move/remove/prune and rejects 
   assert.equal(readAuthority(controlRoot, { allowTorn: false }).records.length, 3, "invalid Git subject must not mutate authority");
   const publicationPointer = path.join(worktree, ".git");
   const publicationPointerBytes = fs.readFileSync(publicationPointer);
-  assert.throws(() => publishAttachment(fx, { beforeAuthorityLock: () => fs.writeFileSync(publicationPointer, "gitdir: invalid-admin\n") }), /changed before authority publication/);
-  fs.writeFileSync(publicationPointer, publicationPointerBytes);
+  assert.throws(() => publishAttachment(fx, { beforeAuthorityLock: () => replaceExistingFile(publicationPointer, "gitdir: invalid-admin\n") }), /changed before authority publication/);
+  replaceExistingFile(publicationPointer, publicationPointerBytes);
   assert.equal(readAuthority(controlRoot, { allowTorn: false }).records.length, 3, "Git pointer race must not mutate authority");
   publishAttachment(fx);
   assert.equal(routeAttachment(routingInput(fx, { subjectRoots: [worktree] })).state, "claimed");
   const gitPointer = path.join(worktree, ".git");
   const pointerBytes = fs.readFileSync(gitPointer);
-  const raced = routeAttachment(routingInput(fx, { subjectRoots: [worktree] }), { beforeAuthorityLock: () => fs.writeFileSync(gitPointer, "gitdir: invalid-admin\n") });
+  const raced = routeAttachment(routingInput(fx, { subjectRoots: [worktree] }), { beforeAuthorityLock: () => replaceExistingFile(gitPointer, "gitdir: invalid-admin\n") });
   assert.equal(raced.state, "reattach_required", "a changed Git admin pointer cannot reuse a pre-lock pairing");
-  fs.writeFileSync(gitPointer, pointerBytes);
+  replaceExistingFile(gitPointer, pointerBytes);
   assert.equal(routeAttachment(routingInput(fx, { subjectRoots: [worktree] })).state, "claimed");
 
   const alias = path.join(root, "gitdir-alias");
@@ -1073,6 +1086,21 @@ test("[MAR-ADAPTER] provider routing covers Git contents, detached roots, transi
   assert.equal(resolveTargetProvider({ target: path.join(commonDir, "config"), homeRoot }).state, "control");
   assert.equal(resolveTargetProvider({ target: path.join(linked, ".git"), homeRoot }).state, "control");
   assert.equal(resolveTargetProvider({ target: path.join(linked, ".workloop", "task.json"), homeRoot }).state, "control");
+  const ordinaryNestedRoot = path.join(repo, "ordinary-nested");
+  fs.mkdirSync(path.join(ordinaryNestedRoot, ".workloop"), { recursive: true });
+  assert.equal(
+    resolveTargetProvider({ target: path.join(ordinaryNestedRoot, ".workloop", "ordinary.txt"), homeRoot }).provider,
+    "git_common",
+    "a nested ordinary .workloop name is not a worktree-root control directory",
+  );
+  const worktreeAlias = path.join(root, "worktree-root-alias");
+  if (process.platform === "win32") fs.symlinkSync(linked, worktreeAlias, "junction");
+  else fs.symlinkSync(linked, worktreeAlias, "dir");
+  assert.equal(
+    resolveTargetProvider({ target: path.join(worktreeAlias, ".workloop", "task.json"), homeRoot }).state,
+    "control",
+    "a physical worktree-root alias preserves control classification",
+  );
   assert.equal(resolveTargetProvider({ target: path.join(homeRoot, ".workloop", "archive", "legacy"), homeRoot, filesystemAttachments: [{ root: fsRoot, controlRoot: detached }] }).state, "control");
 
   const alias = path.join(root, "common-alias");

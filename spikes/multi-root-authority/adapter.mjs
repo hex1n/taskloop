@@ -1769,6 +1769,9 @@ function resolveTargetProvider({ target, homeRoot, filesystemAttachments = [] })
     const gitCommonDir = gitQuery(cwd, "--git-common-dir");
     const gitDir = gitQuery(cwd, "--git-dir");
     const controls = protectedControlRoots({ gitCommonDir, gitDir, worktreeRoot, homeRoot });
+    const cwdId = filesystemObjectId(cwd);
+    const worktreeId = filesystemObjectId(worktreeRoot);
+    if (cwdId && worktreeId && cwdId === worktreeId) controls.push(path.join(cwd, ".git"), path.join(cwd, ".workloop"));
     const classification = classifyControlTargets([target], controls)[0].classification;
     if (classification !== "clean") return { state: classification };
     const overlapsFilesystem = filesystemAttachments.some((entry) => {
