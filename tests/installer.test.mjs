@@ -350,14 +350,39 @@ test("Contract 5 compatibility runtime remains pinned across Contract 6 upgrades
   assert.notEqual(second.runtime_digest, first.runtime_digest);
   assert.equal(fs.existsSync(path.join(runtimeRoot, first.runtime_digest)), false);
 
+  const finalSource = path.join(root, "final-source");
+  for (const directory of ["bin", "lib", "skills"]) fs.cpSync(path.join(ROOT, directory), path.join(finalSource, directory), { recursive: true });
+  fs.appendFileSync(path.join(finalSource, "lib", "prims.mjs"), "\n// second installer upgrade fixture\n");
+  const finalUpgrade = run(path.join(ROOT, "install.mjs"), [], { env: { ...env, WORKLOOP_INSTALL_REPO: finalSource } });
+  assert.equal(finalUpgrade.status, 0, finalUpgrade.stderr);
+  const third = JSON.parse(fs.readFileSync(path.join(home, "bin", ".workloop-active-release.json"), "utf8"));
+  assert.equal(third.compatibility_runtimes.contract_5, legacyHash);
+  assert.ok(fs.existsSync(path.join(runtimeRoot, legacyHash)));
+  assert.equal(runtimeDigest(path.join(runtimeRoot, legacyHash)), legacyHash);
+  assert.notEqual(third.runtime_digest, second.runtime_digest);
+  assert.equal(fs.existsSync(path.join(runtimeRoot, second.runtime_digest)), false);
+
+  const v6Cli = path.join(home, "bin", "workloop.mjs");
+  const finishAuthorityPath = path.join(finishRepo, ".workloop", "events.jsonl");
+  const authorityBeforeV6Reads = fs.readFileSync(finishAuthorityPath);
+  assert.equal(run(v6Cli, ["status", "--repo", finishRepo], { env: { ...process.env, HOME: home, USERPROFILE: home } }).status, 0);
+  assert.equal(run(v6Cli, ["audit", "--repo", finishRepo], { env: { ...process.env, HOME: home, USERPROFILE: home } }).status, 0);
+  assert.equal(run(v6Cli, ["report", "--repo", finishRepo, "--json"], { env: { ...process.env, HOME: home, USERPROFILE: home } }).status, 0);
+  const refusedMutation = run(v6Cli, ["amend", "--repo", finishRepo, "--goal", "forbidden Contract 6 mutation", "--reason", "compatibility boundary"], { env: { ...process.env, HOME: home, USERPROFILE: home } });
+  assert.equal(refusedMutation.status, 2);
+  assert.match(refusedMutation.stderr, /active Contract 5 task is read-only/);
+  assert.deepEqual(fs.readFileSync(finishAuthorityPath), authorityBeforeV6Reads);
+
+  const pinnedCli = path.join(runtimeRoot, third.compatibility_runtimes.contract_5, "bin", "workloop.mjs");
+
   fs.writeFileSync(path.join(finishRepo, "done"), "yes\n");
-  const finished = run(legacyCli, ["achieve", "--repo", finishRepo], { env: { ...process.env, HOME: home, USERPROFILE: home } });
+  const finished = run(pinnedCli, ["achieve", "--repo", finishRepo], { env: { ...process.env, HOME: home, USERPROFILE: home } });
   assert.equal(finished.status, 0, finished.stderr);
-  const finishedStatus = JSON.parse(run(legacyCli, ["status", "--repo", finishRepo], { env: { ...process.env, HOME: home, USERPROFILE: home } }).stdout);
+  const finishedStatus = JSON.parse(run(pinnedCli, ["status", "--repo", finishRepo], { env: { ...process.env, HOME: home, USERPROFILE: home } }).stdout);
   assert.equal(finishedStatus.lifecycle.outcome, "achieved");
-  const abandoned = run(legacyCli, ["abandon", "--repo", abandonRepo, "--reason", "compatibility abandon seal"], { env: { ...process.env, HOME: home, USERPROFILE: home } });
+  const abandoned = run(pinnedCli, ["abandon", "--repo", abandonRepo, "--reason", "compatibility abandon seal"], { env: { ...process.env, HOME: home, USERPROFILE: home } });
   assert.equal(abandoned.status, 0, abandoned.stderr);
-  const abandonedStatus = JSON.parse(run(legacyCli, ["status", "--repo", abandonRepo], { env: { ...process.env, HOME: home, USERPROFILE: home } }).stdout);
+  const abandonedStatus = JSON.parse(run(pinnedCli, ["status", "--repo", abandonRepo], { env: { ...process.env, HOME: home, USERPROFILE: home } }).stdout);
   assert.equal(abandonedStatus.lifecycle.outcome, "abandoned");
 });
 

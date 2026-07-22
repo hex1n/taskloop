@@ -313,6 +313,29 @@ test("repository snapshots become deterministic persisted checkpoints and deltas
   }]);
 });
 
+test("reconciliation capture time is metadata and delta path identity is exact", () => {
+  const opened = openCommand();
+  const state = evolveAll(null, decide(null, opened).events);
+  const noOp = decide(state, {
+    type: "reconcile-artifacts", taskId: state.task_id, at: "2026-07-22T00:00:01.000Z",
+    checkpointId: EMPTY_CHECKPOINT, capturedAtMs: NEXT_CAPTURED_AT_MS,
+    fromCheckpoint: EMPTY_CHECKPOINT, toCheckpoint: EMPTY_CHECKPOINT,
+    changedEntries: [], changedPaths: [], currentScopeViolations: [], coverage: "full", reason: "fresh no-op capture",
+  });
+  const refreshed = evolveAll(state, noOp.events);
+  assert.equal(refreshed.artifact_checkpoint.captured_at_ms, NEXT_CAPTURED_AT_MS);
+  assert.equal(refreshed.evidence.evidence_revision, state.evidence.evidence_revision);
+
+  const mismatched = decide(state, {
+    type: "reconcile-artifacts", taskId: state.task_id, at: "2026-07-22T00:00:01.000Z",
+    checkpointId: NEXT_CHECKPOINT, capturedAtMs: NEXT_CAPTURED_AT_MS,
+    fromCheckpoint: EMPTY_CHECKPOINT, toCheckpoint: NEXT_CHECKPOINT,
+    changedEntries: [{ path: "work.txt", before: null, after: FILE_ENTRY }], changedPaths: ["other.txt"],
+    currentScopeViolations: [], coverage: "full", reason: "forged path identity",
+  });
+  assert.throws(() => evolveAll(state, mismatched.events), /changed paths must exactly match/);
+});
+
 test("an unowned reconciliation records a permanent mutation-history gap", () => {
   const opened = openCommand();
   let state = evolveAll(null, decide(null, opened).events);
@@ -378,12 +401,16 @@ test("Contract 6 history requirements are monotonic domain invariants", () => {
   assert.throws(() => decide(null, finite), /finite write budget.*complete mutation history/);
 
   const complete = openCommand();
-  complete.coverageBasis = { history_requirement: "complete", artifact_state: "full", mutation_history: "full", prewrite_enforcement: "full" };
+  complete.coverageBasis = { history_requirement: "complete", artifact_state: "full", mutation_history: "unknown", prewrite_enforcement: "unknown" };
   let state = evolveAll(null, decide(null, complete).events);
   assert.throws(() => decide(state, {
     type: "amend", taskId: state.task_id, at: "2026-07-22T00:00:01.000Z",
     reason: "attempt assurance downgrade", historyRequirement: "artifact_only",
   }), /cannot relax complete mutation history/);
+
+  const forgedGenesis = openCommand();
+  forgedGenesis.coverageBasis = { history_requirement: "complete", artifact_state: "full", mutation_history: "full", prewrite_enforcement: "full" };
+  assert.throws(() => decide(null, forgedGenesis), /genesis cannot claim full mutation history/);
 
   const artifactOnly = evolveAll(null, decide(null, openCommand()).events);
   const forgedUpgrade = decide(artifactOnly, {
@@ -395,19 +422,40 @@ test("Contract 6 history requirements are monotonic domain invariants", () => {
     intervalToCheckpoint: EMPTY_CHECKPOINT, reason: "invalid coverage promotion",
   });
   assert.throws(() => evolveAll(artifactOnly, forgedUpgrade.events), /full mutation history requires an exhaustive surface/);
+
+  const operationlessUpgrade = decide(artifactOnly, {
+    type: "change-coverage", taskId: artifactOnly.task_id, at: "2026-07-22T00:00:02.000Z",
+    artifactState: "full", mutationHistory: "full", prewriteEnforcement: "full",
+    episodeId: artifactOnly.episodes.at(-1).episode_id, operationId: null, capabilityId: null,
+    hostProfile: "fixture", surface: "direct", exhaustiveSurface: true,
+    effectiveFromCheckpoint: EMPTY_CHECKPOINT, intervalFromCheckpoint: EMPTY_CHECKPOINT,
+    intervalToCheckpoint: EMPTY_CHECKPOINT, reason: "forged operationless coverage promotion",
+  });
+  assert.throws(() => evolveAll(artifactOnly, operationlessUpgrade.events), /operation-scoped capability lease/);
 });
 
 test("finite write budgets are enforced in the engine while fresh satisfaction can still close", () => {
   const bounded = openCommand();
   bounded.budget.writes = 1;
-  bounded.coverageBasis = { history_requirement: "complete", artifact_state: "full", mutation_history: "full", prewrite_enforcement: "full" };
+  bounded.coverageBasis = { history_requirement: "complete", artifact_state: "full", mutation_history: "unknown", prewrite_enforcement: "unknown" };
   let state = evolveAll(null, decide(null, bounded).events);
   state = evolveAll(state, decide(state, {
     type: "authorize-write", taskId: state.task_id, at: "2026-07-22T00:00:01.000Z", decision: "allow",
     files: ["work.txt"], operationId: "bounded-operation", toolFamily: "patch", hostProfile: "fixture-exhaustive",
     targetCoverage: "exact", receiptExpectation: "post",
+    coverageChange: {
+      artifactState: "full", mutationHistory: "full", prewriteEnforcement: "full",
+      episodeId: state.episodes.at(-1).episode_id, operationId: "bounded-operation", capabilityId: "hostcap:v1:fixture-exhaustive",
+      hostProfile: "fixture-exhaustive", surface: "direct", exhaustiveSurface: true,
+      effectiveFromCheckpoint: EMPTY_CHECKPOINT, intervalFromCheckpoint: EMPTY_CHECKPOINT,
+      intervalToCheckpoint: null, reason: "bounded strict prewrite lease",
+    },
   }).events);
   assert.equal(state.spent.writes, 1);
+  assert.throws(() => decide(state, {
+    type: "amend", taskId: state.task_id, at: "2026-07-22T00:00:02.000Z",
+    reason: "attempt to erase already authorized budget", writes: 0,
+  }), /write budget cannot be lower than already authorized operations/);
   assert.throws(() => decide(state, {
     type: "authorize-write", taskId: state.task_id, at: "2026-07-22T00:00:02.000Z", decision: "allow",
     files: ["work.txt"], operationId: "over-budget-operation", toolFamily: "patch", hostProfile: "fixture-exhaustive",
@@ -415,11 +463,38 @@ test("finite write budgets are enforced in the engine while fresh satisfaction c
   }), /write budget exhausted/);
 
   const closing = openCommand();
-  closing.budget.writes = 0;
-  closing.coverageBasis = { history_requirement: "complete", artifact_state: "full", mutation_history: "full", prewrite_enforcement: "full" };
+  closing.budget.writes = 1;
+  closing.coverageBasis = { history_requirement: "complete", artifact_state: "full", mutation_history: "unknown", prewrite_enforcement: "unknown" };
   state = evolveAll(null, decide(null, closing).events);
+  state = evolveAll(state, decide(state, {
+    type: "authorize-write", taskId: state.task_id, at: "2026-07-22T00:00:01.000Z", decision: "allow",
+    files: ["work.txt"], operationId: "closing-operation", toolFamily: "patch", hostProfile: "fixture-exhaustive",
+    targetCoverage: "exact", receiptExpectation: "post",
+    coverageChange: {
+      artifactState: "full", mutationHistory: "full", prewriteEnforcement: "full",
+      episodeId: state.episodes.at(-1).episode_id, operationId: "closing-operation", capabilityId: "hostcap:v1:fixture-exhaustive",
+      hostProfile: "fixture-exhaustive", surface: "direct", exhaustiveSurface: true,
+      effectiveFromCheckpoint: EMPTY_CHECKPOINT, intervalFromCheckpoint: EMPTY_CHECKPOINT,
+      intervalToCheckpoint: null, reason: "closing strict prewrite lease",
+    },
+  }).events);
+  state = evolveAll(state, decide(state, {
+    type: "complete-operation", taskId: state.task_id, at: "2026-07-22T00:00:02.000Z",
+    operationId: "closing-operation", toolFamily: "patch", outcome: "success", reportedTargets: ["work.txt"],
+    receiptQuality: "tool_specific", hostProfile: "fixture-exhaustive",
+    checkpointId: EMPTY_CHECKPOINT, capturedAtMs: NEXT_CAPTURED_AT_MS,
+    fromCheckpoint: EMPTY_CHECKPOINT, toCheckpoint: EMPTY_CHECKPOINT,
+    changedEntries: [], changedPaths: [], currentScopeViolations: [], coverage: "full", reason: "write reverted before reconciliation",
+    coverageChange: {
+      artifactState: "full", mutationHistory: "full", prewriteEnforcement: "full",
+      episodeId: state.episodes.at(-1).episode_id, operationId: "closing-operation", capabilityId: "hostcap:v1:fixture-exhaustive",
+      hostProfile: "fixture-exhaustive", surface: "direct", exhaustiveSurface: true,
+      effectiveFromCheckpoint: EMPTY_CHECKPOINT, intervalFromCheckpoint: EMPTY_CHECKPOINT,
+      intervalToCheckpoint: EMPTY_CHECKPOINT, reason: "closing exhaustive receipt",
+    },
+  }).events);
   const observed = decide(state, {
-    type: "observe", taskId: state.task_id, at: "2026-07-22T00:00:01.000Z", source: "stop",
+    type: "observe", taskId: state.task_id, at: "2026-07-22T00:00:03.000Z", source: "stop",
     observation: observation("satisfied"), attemptId: null, signature: null, failureSummary: "", drift: [], actingSession: "sanitized",
   });
   assert.deepEqual(observed.events.map((event) => event.kind), ["criterion_observed", "task_terminal"]);
@@ -496,12 +571,19 @@ test("closure binds the exact event cursor, not only checkpoint and evidence rev
 
 test("orphan and conflicting completion receipts fail closed without rewriting facts", () => {
   const strictCommand = openCommand();
-  strictCommand.coverageBasis = { history_requirement: "complete", artifact_state: "full", mutation_history: "full", prewrite_enforcement: "full" };
+  strictCommand.coverageBasis = { history_requirement: "complete", artifact_state: "full", mutation_history: "unknown", prewrite_enforcement: "unknown" };
   let state = evolveAll(null, decide(null, strictCommand).events);
   state = evolveAll(state, decide(state, {
     type: "authorize-write", taskId: state.task_id, at: "2026-07-22T00:00:01.000Z", decision: "allow",
-    files: ["work.txt"], operationId: "conflict-operation", toolFamily: "patch", hostProfile: "fixture",
+    files: ["work.txt"], operationId: "conflict-operation", toolFamily: "patch", hostProfile: "fixture-exhaustive",
     targetCoverage: "exact", receiptExpectation: "post",
+    coverageChange: {
+      artifactState: "full", mutationHistory: "full", prewriteEnforcement: "full",
+      episodeId: state.episodes.at(-1).episode_id, operationId: "conflict-operation", capabilityId: "hostcap:v1:fixture-exhaustive",
+      hostProfile: "fixture-exhaustive", surface: "direct", exhaustiveSurface: true,
+      effectiveFromCheckpoint: EMPTY_CHECKPOINT, intervalFromCheckpoint: EMPTY_CHECKPOINT,
+      intervalToCheckpoint: null, reason: "strict conflict fixture lease",
+    },
   }).events);
   const complete = {
     type: "complete-operation", taskId: state.task_id, at: "2026-07-22T00:00:02.000Z",
@@ -511,7 +593,8 @@ test("orphan and conflicting completion receipts fail closed without rewriting f
     currentScopeViolations: [], coverage: "full", reason: "first receipt",
     coverageChange: {
       artifactState: "full", mutationHistory: "full", prewriteEnforcement: "full",
-      episodeId: state.episodes.at(-1).episode_id, hostProfile: "fixture", surface: "direct", exhaustiveSurface: true,
+      episodeId: state.episodes.at(-1).episode_id, operationId: "conflict-operation", capabilityId: "hostcap:v1:fixture-exhaustive",
+      hostProfile: "fixture-exhaustive", surface: "direct", exhaustiveSurface: true,
       effectiveFromCheckpoint: EMPTY_CHECKPOINT, intervalFromCheckpoint: EMPTY_CHECKPOINT,
       intervalToCheckpoint: EMPTY_CHECKPOINT, reason: "trusted fixture receipt",
     },
@@ -792,6 +875,18 @@ test("failure receipts, partial writes, and scan failures degrade without losing
   assert.equal(state.operations["commit-failure"].completion, null);
   assert.equal(state.evidence.artifact_state_coverage, "unknown");
   assert.match(state.coverage_intervals.at(-1).reason, /PostToolUse authority commit failed/);
+
+  assert.equal(pre("commit-failure-race", "commit-failure-race.txt").status, 0);
+  fs.writeFileSync(path.join(repo, "commit-failure-race.txt"), "receipt race failed\n");
+  const unpersistedRace = hook({
+    hook_event_name: "PostToolUse", cwd: repo, session_id: "owner-v6", tool_use_id: "commit-failure-race",
+    tool_name: "Write", tool_input: { file_path: path.join(repo, "commit-failure-race.txt") }, tool_response: { success: true },
+  }, {
+    WORKLOOP_POST_COMMIT_FAILPOINT: "before-authority-commit",
+    WORKLOOP_POST_DEGRADE_FAILPOINT: "task-unavailable",
+  });
+  assert.equal(unpersistedRace.status, 2);
+  assert.match(unpersistedRace.stderr, /task state no longer accepts coverage degradation/);
 
   assert.equal(pre("scan-timeout", "late.txt").status, 0);
   fs.writeFileSync(path.join(repo, "late.txt"), "not yet reconciled\n");
