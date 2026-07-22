@@ -8,7 +8,7 @@ import test from "node:test";
 
 import { buildRecord, readEventStore } from "../lib/event-store.mjs";
 import { artifactCheckpointDelta, artifactCheckpointFromSnapshot, repoSnapshot } from "../lib/criterion.mjs";
-import { assertV3TaskProjection, decide, evolve, evolveAll } from "../lib/task-engine.mjs";
+import { artifactAssuranceHolds, assertV3TaskProjection, closureProjection, decide, evolve, evolveAll } from "../lib/task-engine.mjs";
 import {
   EVENT_PAYLOAD_FIELDS_BY_VERSION,
   artifactCheckpointId,
@@ -350,4 +350,75 @@ test("PreToolUse and PostToolUse persist one correlated operation and landed art
   assert.equal(projection.evidence.tool_completions_observed, 1);
   assert.equal(projection.artifact_revision, 1);
   assert.deepEqual(projection.evidence.touched_files, ["work.txt"]);
+});
+
+test("achieved and not-needed share Contract 6 artifact assurance", () => {
+  const opened = openCommand();
+  const state = evolveAll(null, decide(null, opened).events);
+  assert.deepEqual(artifactAssuranceHolds(state), []);
+  const notNeeded = decide(state, {
+    type: "not-needed", taskId: state.task_id, at: "2026-07-22T00:00:01.000Z", evidence: "baseline already satisfies the need",
+  });
+  assert.equal(evolveAll(state, notNeeded.events).lifecycle.outcome, "not_needed");
+
+  const strictCommand = openCommand();
+  strictCommand.coverageBasis.history_requirement = "complete";
+  const strict = evolveAll(null, decide(null, strictCommand).events);
+  assert.deepEqual(artifactAssuranceHolds(strict), ["mutation_history_incomplete", "prewrite_enforcement_incomplete"]);
+  assert.throws(() => decide(strict, {
+    type: "not-needed", taskId: strict.task_id, at: "2026-07-22T00:00:01.000Z", evidence: "not sufficient",
+  }), /mutation_history_incomplete/);
+
+  const uncovered = structuredClone(state);
+  uncovered.evidence.artifact_state_coverage = "unknown";
+  uncovered.evidence.current_scope_violations = ["outside.txt"];
+  assert.deepEqual(artifactAssuranceHolds(uncovered), ["artifact_state_unreconciled", "artifact_scope_violation"]);
+
+  const satisfied = observation("satisfied");
+  const observed = decide(state, {
+    type: "observe", taskId: state.task_id, at: "2026-07-22T00:00:02.000Z", source: "stop", observation: satisfied,
+    attemptId: null, signature: null, failureSummary: "", drift: [], actingSession: "sanitized",
+  });
+  assert.deepEqual(observed.events.map((event) => event.kind), ["criterion_observed", "task_terminal"]);
+
+  const strictObserved = decide(strict, {
+    type: "observe", taskId: strict.task_id, at: "2026-07-22T00:00:02.000Z", source: "stop", observation: observation("satisfied"),
+    attemptId: null, signature: null, failureSummary: "", drift: [], actingSession: "sanitized",
+  });
+  assert.deepEqual(strictObserved.events.map((event) => event.kind), ["criterion_observed"]);
+  assert.deepEqual(closureProjection(evolveAll(strict, strictObserved.events)).reasons, ["mutation_history_incomplete", "prewrite_enforcement_incomplete"]);
+});
+
+test("not-needed reconciles the repository before applying the terminal gate", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-v6-not-needed-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const changed of [false, true]) {
+    const repo = path.join(root, changed ? "changed" : "unchanged");
+    const home = path.join(root, changed ? "changed-home" : "unchanged-home");
+    fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+    fs.mkdirSync(home, { recursive: true });
+    const command = openCommand();
+    command.episodes[0].host_session_id = "owner-v6";
+    const event = decide(null, command).events[0];
+    const record = buildRecord({
+      transactionId: randomUUID(), repoSequence: 1, occurredAtEpochMs: Date.parse(AT),
+      actor: { kind: "cli", session_id: "owner-v6" }, previousRecordDigest: null,
+      events: [{ ...event, task_event_sequence: 1 }],
+    });
+    fs.mkdirSync(path.join(repo, ".workloop"), { recursive: true });
+    fs.writeFileSync(path.join(repo, ".workloop", "events.jsonl"), `${JSON.stringify(record)}\n`);
+    if (changed) fs.writeFileSync(path.join(repo, "work.txt"), "unexpected\n");
+    const result = spawnSync(process.execPath, [CLI, "not-needed", "--repo", repo, "--evidence", "checked baseline"], {
+      cwd: repo, env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_SESSION_ID: "owner-v6" }, encoding: "utf8",
+    });
+    const kinds = readEventStore(repo).events.map((item) => item.kind);
+    if (changed) {
+      assert.equal(result.status, 2);
+      assert.match(result.stderr, /artifact_changed_since_baseline/);
+      assert.deepEqual(kinds, ["task_opened", "artifact_reconciled", "coverage_changed"]);
+    } else {
+      assert.equal(result.status, 0, result.stderr);
+      assert.deepEqual(kinds, ["task_opened", "artifact_reconciled", "task_terminal"]);
+    }
+  }
 });
