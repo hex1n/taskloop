@@ -578,7 +578,43 @@ test("Contract 6 history requirements are monotonic domain invariants", () => {
     hostProfile: "fixture-exhaustive", surface: "direct", exhaustiveSurface: true,
     effectiveFromCheckpoint: EMPTY_CHECKPOINT, intervalFromCheckpoint: EMPTY_CHECKPOINT,
     intervalToCheckpoint: null, reason: "must not heal orphan evidence",
-  }), /cannot be established after an orphan completion receipt/);
+  }), /cannot coexist with an orphan completion receipt/);
+
+  let interleavedOrphan = evolveAll(null, decide(null, {
+    ...openCommand(), coverageBasis: { history_requirement: "complete", artifact_state: "full", mutation_history: "unknown", prewrite_enforcement: "unknown" },
+  }).events);
+  interleavedOrphan = evolveAll(interleavedOrphan, decide(interleavedOrphan, {
+    type: "authorize-write", taskId: interleavedOrphan.task_id, at: "2026-07-22T00:00:05.000Z", decision: "allow",
+    files: ["work.txt"], operationId: "owned-before-orphan", toolFamily: "patch", hostProfile: "fixture-exhaustive",
+    targetCoverage: "exact", receiptExpectation: "post",
+    coverageChange: {
+      artifactState: "full", mutationHistory: "full", prewriteEnforcement: "full",
+      episodeId: interleavedOrphan.episodes.at(-1).episode_id, operationId: "owned-before-orphan", capabilityId: "hostcap:v1:fixture-exhaustive",
+      hostProfile: "fixture-exhaustive", surface: "direct", exhaustiveSurface: true,
+      effectiveFromCheckpoint: EMPTY_CHECKPOINT, intervalFromCheckpoint: EMPTY_CHECKPOINT,
+      intervalToCheckpoint: null, reason: "owned lease before orphan",
+    },
+  }).events);
+  interleavedOrphan = evolveAll(interleavedOrphan, decide(interleavedOrphan, {
+    type: "complete-tool", taskId: interleavedOrphan.task_id, at: "2026-07-22T00:00:06.000Z",
+    operationId: "orphan-during-lease", toolFamily: "patch", outcome: "unknown",
+    reportedTargets: [], receiptQuality: "unknown", hostProfile: "fixture-exhaustive",
+  }).events);
+  assert.equal(interleavedOrphan.evidence.mutation_history_coverage, "unknown");
+  assert.throws(() => decide(interleavedOrphan, {
+    type: "complete-operation", taskId: interleavedOrphan.task_id, at: "2026-07-22T00:00:07.000Z",
+    operationId: "owned-before-orphan", toolFamily: "patch", outcome: "success", reportedTargets: [],
+    receiptQuality: "tool_specific", hostProfile: "fixture-exhaustive",
+    checkpointId: EMPTY_CHECKPOINT, capturedAtMs: NEXT_CAPTURED_AT_MS, fromCheckpoint: EMPTY_CHECKPOINT, toCheckpoint: EMPTY_CHECKPOINT,
+    changedEntries: [], changedPaths: [], currentScopeViolations: [], coverage: "full", reason: "must not hide orphan",
+    coverageChange: {
+      artifactState: "full", mutationHistory: "full", prewriteEnforcement: "full",
+      episodeId: interleavedOrphan.episodes.at(-1).episode_id, operationId: "owned-before-orphan", capabilityId: "hostcap:v1:fixture-exhaustive",
+      hostProfile: "fixture-exhaustive", surface: "direct", exhaustiveSurface: true,
+      effectiveFromCheckpoint: EMPTY_CHECKPOINT, intervalFromCheckpoint: EMPTY_CHECKPOINT,
+      intervalToCheckpoint: EMPTY_CHECKPOINT, reason: "orphan remains a permanent gap",
+    },
+  }), /cannot coexist with an orphan completion receipt/);
 });
 
 test("finite write budgets are enforced in the engine while fresh satisfaction can still close", () => {
@@ -732,6 +768,16 @@ test("orphan and conflicting completion receipts fail closed without rewriting f
       intervalToCheckpoint: null, reason: "strict conflict fixture lease",
     },
   }).events);
+  assert.throws(() => decide(state, {
+    type: "complete-tool", taskId: state.task_id, at: "2026-07-22T00:00:01.500Z",
+    operationId: "conflict-operation", toolFamily: "patch", outcome: "success", reportedTargets: ["work.txt"],
+    receiptQuality: "tool_specific", hostProfile: "fixture",
+  }), /operation authorization/);
+  assert.throws(() => decide(state, {
+    type: "complete-tool", taskId: state.task_id, at: "2026-07-22T00:00:01.600Z",
+    operationId: "conflict-operation", toolFamily: "shell", outcome: "success", reportedTargets: ["work.txt"],
+    receiptQuality: "tool_specific", hostProfile: "fixture-exhaustive",
+  }), /operation authorization/);
   const complete = {
     type: "complete-operation", taskId: state.task_id, at: "2026-07-22T00:00:02.000Z",
     operationId: "conflict-operation", toolFamily: "patch", outcome: "success", reportedTargets: ["work.txt"],
@@ -746,7 +792,7 @@ test("orphan and conflicting completion receipts fail closed without rewriting f
       intervalToCheckpoint: EMPTY_CHECKPOINT, reason: "trusted fixture receipt",
     },
   };
-  assert.throws(() => decide(state, { ...complete, hostProfile: "fixture" }), /authorized operation receipts/);
+  assert.throws(() => decide(state, { ...complete, hostProfile: "fixture" }), /operation authorization/);
   state = evolveAll(state, decide(state, complete).events);
   assert.equal(state.operations["conflict-operation"].completion.outcome, "success");
   assert.equal(state.evidence.mutation_history_coverage, "full");
@@ -876,6 +922,8 @@ test("outcome schema 4 preserves terminal count basis and coverage", (t) => {
   });
   append(completion.events); state = evolveAll(state, completion.events);
   assert.equal(state.evidence.mutation_history_coverage, "full");
+  const fullState = structuredClone(state);
+  const fullPrefix = records.slice();
   const joined = decide(state, {
     type: "join", taskId: state.task_id, at: "2026-07-22T00:00:03.000Z", reason: "projector boundary fixture", actingSession: "next-host",
     episode: {
@@ -913,6 +961,49 @@ test("outcome schema 4 preserves terminal count basis and coverage", (t) => {
     files: terminalWriteSet.files, basis: terminalWriteSet.write_count_basis,
     artifact: terminalWriteSet.artifact_state_coverage, history: terminalWriteSet.mutation_history_coverage,
   }, { files: ["work.txt"], basis: "authorized", artifact: "full", history: "unknown" });
+
+  const deltaRecords = fullPrefix.slice();
+  let deltaRepoSequence = deltaRecords.at(-1).repo_sequence;
+  let deltaTaskSequence = deltaRecords.at(-1).events.at(-1).task_event_sequence;
+  let deltaPreviousDigest = deltaRecords.at(-1).record_digest;
+  const appendDelta = (events) => {
+    const record = buildRecord({
+      transactionId: randomUUID(), repoSequence: ++deltaRepoSequence, occurredAtEpochMs: Date.parse(events[0].at),
+      actor: { kind: "cli", session_id: "sanitized" }, previousRecordDigest: deltaPreviousDigest,
+      events: events.map((event) => ({ ...event, task_event_sequence: ++deltaTaskSequence })),
+    });
+    deltaPreviousDigest = record.record_digest; deltaRecords.push(record);
+  };
+  let deltaState = fullState;
+  const unownedDelta = decide(deltaState, {
+    type: "reconcile-artifacts", taskId: deltaState.task_id, at: "2026-07-22T00:00:03.000Z",
+    checkpointId: SECOND_CHECKPOINT, capturedAtMs: NEXT_CAPTURED_AT_MS + 1_000,
+    fromCheckpoint: NEXT_CHECKPOINT, toCheckpoint: SECOND_CHECKPOINT,
+    changedEntries: [{ path: "other.txt", before: null, after: SECOND_FILE_ENTRY }], changedPaths: ["other.txt"],
+    currentScopeViolations: [], coverage: "full", reason: "legacy unowned delta without coverage event",
+  });
+  appendDelta(unownedDelta.events); deltaState = evolveAll(deltaState, unownedDelta.events);
+  assert.equal(deltaState.evidence.mutation_history_coverage, "unknown");
+  assert.equal(deltaState.authority.prewrite_enforcement, "unknown");
+  const deltaTerminal = decide(deltaState, {
+    type: "abandon", taskId: deltaState.task_id, at: "2026-07-22T00:00:04.000Z", reason: "delta fixture complete",
+  });
+  appendDelta(deltaTerminal.events);
+  const deltaHome = path.join(root, "delta-home"); fs.mkdirSync(deltaHome);
+  syncOutcomeRecords({ repoIdentity: `sha256:${"8".repeat(64)}`, records: deltaRecords, home: deltaHome });
+  const deltaRows = fs.readFileSync(path.join(deltaHome, ".workloop", "outcomes.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+  assert.deepEqual({
+    history: deltaRows.at(-1).payload.write_evidence.mutation_history_coverage,
+    prewrite: deltaRows.at(-1).payload.write_evidence.prewrite_enforcement,
+  }, { history: "unknown", prewrite: "unknown" });
+  const deltaRepo = path.join(root, "delta-repo");
+  fs.mkdirSync(path.join(deltaRepo, ".git"), { recursive: true }); fs.mkdirSync(path.join(deltaRepo, ".workloop"));
+  fs.writeFileSync(path.join(deltaRepo, ".workloop", "events.jsonl"), `${deltaRecords.map((record) => JSON.stringify(record)).join("\n")}\n`);
+  const deltaLedger = spawnSync(process.execPath, [CLI, "ledger", "--repo", deltaRepo, "--json"], {
+    cwd: deltaRepo, env: { ...process.env, HOME: deltaHome, USERPROFILE: deltaHome }, encoding: "utf8",
+  });
+  assert.equal(deltaLedger.status, 0, deltaLedger.stderr);
+  assert.equal(JSON.parse(deltaLedger.stdout).queries.terminal_write_sets[0].mutation_history_coverage, "unknown");
 });
 
 test("PreToolUse and PostToolUse persist one correlated operation and landed artifact", (t) => {
