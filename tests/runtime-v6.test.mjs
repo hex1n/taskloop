@@ -1,13 +1,16 @@
 import assert from "node:assert/strict";
 import { createHash, randomUUID } from "node:crypto";
 import fs from "node:fs";
+import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
 import { buildRecord } from "../lib/event-store.mjs";
+import { artifactCheckpointDelta, artifactCheckpointFromSnapshot, repoSnapshot } from "../lib/criterion.mjs";
 import { assertV3TaskProjection, decide, evolve, evolveAll } from "../lib/task-engine.mjs";
 import {
   EVENT_PAYLOAD_FIELDS_BY_VERSION,
+  artifactCheckpointId,
   eventPayloadFields,
 } from "../lib/prims.mjs";
 import {
@@ -24,9 +27,9 @@ function digest(target) {
 }
 
 const AT = "2026-07-22T00:00:00.000Z";
-const EMPTY_CHECKPOINT = `sha256:${"0".repeat(64)}`;
-const NEXT_CHECKPOINT = `sha256:${"2".repeat(64)}`;
 const FILE_DIGEST = `sha256:${"3".repeat(64)}`;
+const EMPTY_CHECKPOINT = artifactCheckpointId([]);
+const NEXT_CHECKPOINT = artifactCheckpointId([{ path: "work.txt", hash: FILE_DIGEST }]);
 
 function observation(verdict = "unsatisfied") {
   return {
@@ -201,4 +204,60 @@ test("Contract 6 rejects cross-contract event versions", () => {
   assert.throws(() => evolve(state, {
     kind: "write_authorized", payload_version: 1, task_id: state.task_id, at: "2026-07-22T00:00:01.000Z", payload: { files: ["work.txt"] },
   }), /incompatible with Contract 6/);
+});
+
+test("repository snapshots become deterministic persisted checkpoints and deltas", (t) => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-v6-checkpoint-"));
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(repo, ".git"));
+  fs.mkdirSync(path.join(repo, ".workloop"));
+  fs.writeFileSync(path.join(repo, ".git", "ignored"), "control");
+  fs.writeFileSync(path.join(repo, ".workloop", "ignored"), "control");
+  fs.writeFileSync(path.join(repo, "b.txt"), "before\n");
+  fs.writeFileSync(path.join(repo, "a.txt"), "stable\n");
+
+  const before = artifactCheckpointFromSnapshot(repoSnapshot(repo));
+  assert.deepEqual(before.entries.map((entry) => entry.path), ["a.txt", "b.txt"]);
+  assert.match(before.checkpoint_id, /^sha256:[0-9a-f]{64}$/u);
+  assert.ok(before.entries.every((entry) => /^sha256:[0-9a-f]{64}$/u.test(entry.hash)));
+
+  fs.rmSync(path.join(repo, "b.txt"));
+  fs.writeFileSync(path.join(repo, "c.txt"), "after\n");
+  const after = artifactCheckpointFromSnapshot(repoSnapshot(repo));
+  const delta = artifactCheckpointDelta(before, after);
+  assert.deepEqual(delta.changed_paths, ["b.txt", "c.txt"]);
+  assert.deepEqual(delta.changed_entries, [
+    { path: "b.txt", before: before.entries[1].hash, after: null },
+    { path: "c.txt", before: null, after: after.entries[1].hash },
+  ]);
+});
+
+test("an unowned reconciliation records a permanent mutation-history gap", () => {
+  const opened = openCommand();
+  let state = evolveAll(null, decide(null, opened).events);
+  const reconciliation = decide(state, {
+    type: "reconcile-artifacts", taskId: state.task_id, at: "2026-07-22T00:00:01.000Z",
+    checkpointId: NEXT_CHECKPOINT, fromCheckpoint: EMPTY_CHECKPOINT, toCheckpoint: NEXT_CHECKPOINT,
+    changedEntries: [{ path: "work.txt", before: null, after: FILE_DIGEST }], changedPaths: ["work.txt"],
+    currentScopeViolations: [], coverage: "full", reason: "pre-criterion",
+    coverageChange: {
+      artifactState: "full", mutationHistory: "unknown", prewriteEnforcement: "unknown",
+      episodeId: state.episodes.at(-1).episode_id, hostProfile: "repository", surface: "unhooked-reconcile",
+      exhaustiveSurface: false, effectiveFromCheckpoint: EMPTY_CHECKPOINT, intervalFromCheckpoint: EMPTY_CHECKPOINT,
+      intervalToCheckpoint: NEXT_CHECKPOINT, reason: "unowned delta",
+    },
+  });
+  assert.deepEqual(reconciliation.events.map((event) => event.kind), ["artifact_reconciled", "coverage_changed"]);
+  state = evolveAll(state, reconciliation.events);
+  assert.equal(state.coverage_intervals.length, 1);
+  assert.equal(state.evidence.mutation_history_coverage, "unknown");
+
+  const attemptedUpgrade = decide(state, {
+    type: "change-coverage", taskId: state.task_id, at: "2026-07-22T00:00:02.000Z",
+    artifactState: "full", mutationHistory: "full", prewriteEnforcement: "full",
+    episodeId: state.episodes.at(-1).episode_id, hostProfile: "fixture", surface: "direct", exhaustiveSurface: true,
+    effectiveFromCheckpoint: NEXT_CHECKPOINT, intervalFromCheckpoint: NEXT_CHECKPOINT,
+    intervalToCheckpoint: NEXT_CHECKPOINT, reason: "must not heal history",
+  });
+  assert.throws(() => evolveAll(state, attemptedUpgrade.events), /cannot upgrade degraded mutation history/);
 });
