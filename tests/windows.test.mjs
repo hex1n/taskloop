@@ -88,7 +88,7 @@ test("Windows install is repeatable and exposes workloop to cmd and both PowerSh
   ];
   for (const [executable, args, label] of commands) {
     const info = parsed(spawnSync(executable, args, { env: shellEnv, encoding: "utf8", timeout: 30_000 }), label);
-    assert.equal(info.runtime_contract, 6, label);
+    assert.equal(info.runtime_contract, 7, label);
   }
 });
 
