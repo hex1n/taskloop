@@ -681,8 +681,7 @@ test("one observation decision can suspend atomically and replay without a snaps
       observation: {
         observation_id: deterministicId("phase-1", "observation", 30 + attempt),
         verdict: "unsatisfied",
-        exit_code: 1,
-        output_tail: "still failing",
+        execution: { exit_code: 1, signal: null, duration_ms: 1, execution_error: null, output_tail: "still failing", timeout_seconds: 30 },
         changed_paths: [],
         observed_at: at,
       },

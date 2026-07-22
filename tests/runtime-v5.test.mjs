@@ -98,7 +98,7 @@ test("CLI mutations commit one authority record and a disposable snapshot", (t) 
   assert.equal(run(["abandon", "--repo", fx.repo, "--reason", "done"], { env: fx.env }).status, 0);
   assert.deepEqual(readEventStore(fx.repo).events.map((event) => event.kind), [
     "task_opened", "write_authorized", "task_suspended", "task_resumed",
-    "review_recorded", "task_amended", "task_terminal",
+    "coverage_changed", "review_recorded", "task_amended", "task_terminal",
   ]);
 });
 

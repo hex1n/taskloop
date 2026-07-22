@@ -1678,21 +1678,23 @@ test("wall-clock telemetry advances and user suspension and terminal close episo
   assert.equal(value.episodes[1].ended_at, "2026-07-11T00:00:04.000Z");
 });
 
-test("join transfers an active episode without changing substantive or ledger revisions", (t) => {
+test("join transfers an active episode without changing substantive or evidence revisions", (t) => {
   const fx = fixture(t); const firstEnv = { ...fx.env, WORKLOOP_SESSION_ID: "session-a" };
   assert.equal(open({ ...fx, env: firstEnv }, "default", ["--review-policy", "required", "--required-review-level", "fresh-context"]).status, 0);
   assert.equal(run(["review", "--repo", fx.repo, "--level", "fresh-context", "--reviewer", "peer", "--blocking-findings", "0", "--advisory-findings", "0"], { env: firstEnv }).status, 0);
-  const before = loadTask(fx.repo); const eventSequence = before.task_event_sequence;
+  const before = loadTask(fx.repo); const eventSequence = before.task_event_sequence; const evidenceRevision = before.evidence.evidence_revision;
   const joined = run(["join", "--repo", fx.repo, "--reason", "continue here"], { env: { ...fx.env, WORKLOOP_SESSION_ID: "session-b" } });
   assert.equal(joined.status, 0, joined.stderr);
   const after = loadTask(fx.repo);
-  assert.equal(after.task_revision, before.task_revision + 1);
+  assert.equal(after.task_revision, before.task_revision + 2);
   assert.equal(after.last_substantive_task_revision, before.last_substantive_task_revision);
   assert.equal(after.artifact_revision, before.artifact_revision);
-  assert.equal(after.task_event_sequence, eventSequence + 1);
+  assert.equal(after.evidence.evidence_revision, evidenceRevision);
+  assert.equal(after.task_event_sequence, eventSequence + 2);
   assert.equal(after.episodes.at(-1).host_session_id, "session-b");
-  assert.equal(after.episodes.at(-2).end_task_revision, after.task_revision);
-  assert.equal(after.episodes.at(-1).start_task_revision, after.task_revision);
+  assert.equal(after.episodes.at(-2).end_task_revision, before.task_revision + 1);
+  assert.equal(after.episodes.at(-1).start_task_revision, before.task_revision + 1);
+  assert.equal(after.coverage_intervals.at(-1).surface, "episode-boundary");
   assert.equal(projectReviewRequirement(after).accepted, true);
   const statePath = path.join(fx.repo, ".workloop", "task.json"); const joinedBytes = fs.readFileSync(statePath, "utf8");
   const oldOwnerStop = run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo, session_id: "session-a" }) });

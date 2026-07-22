@@ -83,6 +83,11 @@ test("production assembly has no direct authoritative task writer", () => {
   assert.doesNotMatch(source, /\btransition\s*\(/);
   assert.match(source, /commitRecord\s*\(/);
   assert.match(source, /saveTaskSnapshot\s*\(/);
+  const transaction = source.slice(source.indexOf("function commitTaskCommand"), source.indexOf("function readTask"));
+  const preflight = transaction.indexOf("evolveAll(current, persistedEvents)");
+  const projectionValidation = transaction.indexOf("assertV3TaskProjection(projection)");
+  const append = transaction.indexOf("commitRecord(repo, record");
+  assert.ok(preflight >= 0 && projectionValidation > preflight && append > projectionValidation, "the exact reducer and projection preflight must precede the irreversible authority append");
 });
 
 test("criterion execution is never nested in a task-lock transaction", () => {
