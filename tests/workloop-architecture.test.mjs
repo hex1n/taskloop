@@ -24,9 +24,9 @@ test("assembly remains the only cross-leaf seam", () => {
   for (const name of MODULES.filter((x) => !new Set(["application.mjs", "prims.mjs"]).has(x))) assert.ok(imports(path.join(ROOT, "lib", name)).every((x) => x === "./prims.mjs"), name);
 });
 
-test("integration handshake exposes runtime-contract-5 independent schemas", () => {
+test("integration handshake exposes runtime-contract-6 independent schemas", () => {
   const info = JSON.parse(run(CLI, ["info"]).stdout);
-  assert.deepEqual({ runtime: info.runtime_contract, task: info.task_snapshot_schema_version, record: info.event_record_schema_version, outcome: info.outcome_projection_schema_version }, { runtime: 5, task: 3, record: 2, outcome: 3 });
+  assert.deepEqual({ runtime: info.runtime_contract, task: info.task_snapshot_schema_version, record: info.event_record_schema_version, outcome: info.outcome_projection_schema_version }, { runtime: 6, task: 3, record: 2, outcome: 4 });
   assert.equal(info.criterion_adapter_protocol_version, 2);
   assert.equal(info.event_store, ".workloop/events.jsonl");
   assert.equal(info.outcome_projection, "~/.workloop/outcomes.jsonl");
@@ -98,7 +98,7 @@ test("observation compare-and-commit binds intent, hashes outside locks, and rev
   assert.match(application, /function observationAuthorityToken\(authority, task, intent\)[\s\S]*?return \{\s*intent,/);
   assert.match(application, /prepared\.intent !== intent \|\| prepared\.token\?\.intent !== intent/);
   assert.match(application, /const currentSnapshot = repoSnapshot\([\s\S]*?return withTaskLock\(repo,/);
-  for (const callback of application.matchAll(/withTaskLock\(repo, \(\) => \{([\s\S]*?)\n  \}\);/g)) assert.doesNotMatch(callback[1], /repoSnapshot\s*\(/);
+  assert.match(application, /function terminalNotNeededContract6[\s\S]*?const repositorySnapshot = repoSnapshot\([\s\S]*?const committed = withTaskLock\(repo,/);
   assert.match(application, /return withTaskLock\(repo,[\s\S]*?validateRepoSnapshot\(repo, currentSnapshot,/);
   assert.match(application, /OBSERVATION_COMMIT_VALIDATION_MS = 50/);
   assert.match(application, /execution_error = "criterion_side_effect"/);
@@ -121,6 +121,7 @@ test("Windows W01-W08 selection is non-vacuous in every listed source", () => {
     "event-store.test.mjs",
     "task-snapshot-v3.test.mjs",
     "runtime-v5.test.mjs",
+    "runtime-v6.test.mjs",
     "workloop-architecture.test.mjs",
   ]) {
     assert.match(fs.readFileSync(path.join(ROOT, "tests", file), "utf8"), /\[W0[1-8]\]/, file);

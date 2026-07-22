@@ -31,18 +31,18 @@ function fixture(t) {
 }
 
 function open(fx, extra = []) {
-  return run(["open", "--repo", fx.repo, "--goal", "finish", "--criterion-file", "check.mjs", "--criterion-policy", "default", "--alignment-because", "the checker exercises the result", "--files", "work.txt", "--risk", "routine", "--risk-reason", "isolated", ...extra], { env: fx.env });
+  return run(["open", "--repo", fx.repo, "--goal", "finish", "--criterion-file", "check.mjs", "--criterion-policy", "default", "--alignment-because", "the checker exercises the result", "--files", "work.txt", "--risk", "routine", "--risk-reason", "isolated", "--history-requirement", "artifact-only", ...extra], { env: fx.env });
 }
 
 function projection(repo) {
   return JSON.parse(fs.readFileSync(path.join(repo, ".workloop", "task.json"), "utf8")).projection;
 }
 
-test("runtime contract 5 describes independent repository and HOME schemas", () => {
+test("current runtime describes independent repository and HOME schemas", () => {
   const info = JSON.parse(run(["info"]).stdout);
   assert.deepEqual(info, {
-    name: "workloop", runtime_contract: 5, criterion_adapter_protocol_version: 2, task_snapshot_schema_version: 3,
-    event_record_schema_version: 2, outcome_projection_schema_version: 3,
+    name: "workloop", runtime_contract: 6, criterion_adapter_protocol_version: 2, task_snapshot_schema_version: 3,
+    event_record_schema_version: 2, outcome_projection_schema_version: 4,
     event_store: ".workloop/events.jsonl", outcome_projection: "~/.workloop/outcomes.jsonl",
     distribution_owner: "workloop",
   });
@@ -65,7 +65,7 @@ test("status, verify, report, and audit self-describe the active storage contrac
       snapshot: payload.task_snapshot_schema_version,
       record: payload.event_record_schema_version,
       outcome: payload.outcome_projection_schema_version,
-    }, { runtime: 5, snapshot: 3, record: 2, outcome: 3 }, args[0]);
+    }, { runtime: 6, snapshot: 3, record: 2, outcome: 4 }, args[0]);
   }
 
   fs.appendFileSync(path.join(fx.repo, ".workloop", "events.jsonl"), "{broken}\n");
@@ -382,8 +382,8 @@ test("outcome cursor makes the normal commit path incremental", (t) => {
       task_id: first.events[0].task_id,
       task_event_sequence: 2,
       kind: "write_authorized",
-      payload_version: 1,
-      payload: { files: ["work.txt"] },
+      payload_version: 2,
+      payload: { operation_id: "cursor-operation", tool_family: "patch", declared_targets: ["work.txt"], target_coverage: "exact", host_profile: "fixture", receipt_expectation: "post" },
     }],
   });
   let projectionReads = 0;
@@ -417,7 +417,7 @@ test("a stale repo cursor cannot omit history after the shared projection is reb
       task_id: "f68c6346-850e-4be2-a99b-ce3687097253",
       task_event_sequence: 1,
       kind: "task_opened",
-      payload_version: 1,
+      payload_version: first.events[0].payload_version,
       payload: first.events[0].payload,
     }],
   });
@@ -432,8 +432,8 @@ test("a stale repo cursor cannot omit history after the shared projection is reb
       task_id: first.events[0].task_id,
       task_event_sequence: 2,
       kind: "write_authorized",
-      payload_version: 1,
-      payload: { files: ["work.txt"] },
+      payload_version: 2,
+      payload: { operation_id: "repair-operation", tool_family: "patch", declared_targets: ["work.txt"], target_coverage: "exact", host_profile: "fixture", receipt_expectation: "post" },
     }],
   });
 

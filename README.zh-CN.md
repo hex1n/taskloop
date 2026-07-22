@@ -27,7 +27,7 @@ workloop 是一个零依赖 Node.js CLI，也是面向 coding agent 的可移植
 - `lib/task-store.mjs` 拥有 digest 校验的 schema-v3 snapshot wrapper 和跨进程 task lock。
 - `lib/supervision.mjs`、`lib/host-hooks.mjs`、`lib/evidence-ledger.mjs`、`lib/untracked.mjs` 分别承载 hook 写入仲裁、宿主协议编码、有界证据遥测和无任务写入提示。
 - `install.mjs` 在当前用户 home 下安装版本化 runtime、稳定 shim 和四个 managed skills。
-- `tests/` 覆盖行为、架构、hook 协议、runtime contract 5、事件存储、snapshot、installer、skill closure 和 Windows gates。
+- `tests/` 覆盖行为、架构、hook 协议、runtime contract 5 兼容性、runtime contract 6、事件存储、snapshot、installer、skill closure 和 Windows gates。
 
 ## 核心模型
 
@@ -82,7 +82,9 @@ workloop abandon --repo . --reason "superseded"
 
 ## 运行时权威
 
-Runtime contract 5 把 `.workloop/events.jsonl` 作为仓库内唯一权威。`.workloop/task.json` 是 schema-v3 snapshot wrapper，可以删除并从事件重建，永远不会被提升为权威。每个公开 mutation 都先提交一条 hash-chained transaction，再刷新 snapshot。
+Runtime contract 6 把 `.workloop/events.jsonl` 作为仓库内唯一权威。`.workloop/task.json` 是 schema-v3 snapshot wrapper，可以删除并从事件重建，永远不会被提升为权威。Contract 6 projection 使用 persisted task runtime contract 5；event record framing 仍是 schema 2。每个公开 mutation 都先提交一条 hash-chained transaction，再刷新 snapshot。
+
+写入证据分成四类：PreToolUse 只记录授权，PostToolUse/PostToolUseFailure 记录相关联的完成回执，仓库 checkpoint reconciliation 记录真正落地的 artifact 变化，coverage 则说明历史是否完整。没有稳定宿主回执时，Workloop 会保持 `partial`/`unknown`，不会把授权次数伪报成实际写入次数。`--history-requirement complete` 会在当前非穷尽宿主能力上 fail closed；接受路径感知但不完整的操作历史时，显式使用 `--history-requirement artifact-only`。
 
 `~/.workloop/outcomes.jsonl` 是 home 下的 best-effort projection，不是 task authority。可以幂等重建和审计：
 
@@ -92,7 +94,7 @@ workloop audit --repo .
 workloop audit-outcomes
 ```
 
-Runtime contract 5 只移除活动产物文件名中的 schema 版本，JSON/JSONL 内容里的版本字段保持不变。如果仓库仍使用旧的带版本文件名，普通命令会 fail closed，直到用户显式授权一次性改名：
+Contract 5 已经移除了活动产物文件名中的 schema 版本；Contract 6 继续使用稳定文件名。如果仓库仍使用更旧的带版本文件名，普通命令会 fail closed，直到用户显式授权一次性改名：
 
 ```sh
 workloop migrate-artifact-names --repo . \
@@ -105,16 +107,16 @@ Schema-2 task 和 orphan/mixed snapshot 都 fail closed。只有带显式 user p
 
 ```sh
 workloop archive-incompatible-state --repo . \
-  --reason "runtime-contract-5 hard cutover" --granted-by user
+  --reason "runtime-contract-6 hard cutover" --granted-by user
 ```
 
 `workloop info` 暴露当前版本：
 
-- `runtime_contract: 5`
+- `runtime_contract: 6`
 - `criterion_adapter_protocol_version: 2`
 - `task_snapshot_schema_version: 3`
 - `event_record_schema_version: 2`
-- `outcome_projection_schema_version: 3`
+- `outcome_projection_schema_version: 4`
 
 ## Budget 与安全
 

@@ -807,5 +807,6 @@ test("the fixed Windows matrix runs the command-safety and current runtime suite
 
   assert.match(workflow, /tests\/command-safety-adversarial\.test\.mjs/);
   assert.match(workflow, /tests\/runtime-v5\.test\.mjs/);
+  assert.match(workflow, /tests\/runtime-v6\.test\.mjs/);
   assert.doesNotMatch(workflow, /tests\/runtime-v4\.test\.mjs/);
 });

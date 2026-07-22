@@ -13,6 +13,7 @@ import { directoryLockBackoff, localTimestamp, withOwnedDirectoryLock } from "./
 const __filename = fileURLToPath(import.meta.url);
 const SOURCE = path.resolve(process.env.WORKLOOP_INSTALL_REPO ?? path.dirname(__filename));
 const HOME = path.resolve(process.env.WORKLOOP_INSTALL_HOME ?? os.homedir());
+const INSTALL_HOME_EXPLICIT = Boolean(process.env.WORKLOOP_INSTALL_HOME);
 // Read the source checkout's contract from its prims.mjs text instead of
 // importing it: WORKLOOP_INSTALL_REPO may point at a different checkout than
 // the one this installer file (and its ./lib import) was loaded from, and the
@@ -20,7 +21,7 @@ const HOME = path.resolve(process.env.WORKLOOP_INSTALL_HOME ?? os.homedir());
 const RUNTIME_CONTRACT = (() => {
   const source = fs.readFileSync(path.join(SOURCE, "lib", "prims.mjs"), "utf8");
   const value = Number(source.match(/const RUNTIME_CONTRACT = (\d+);/)?.[1]);
-  if (value !== 5) throw new Error(`workloop installer requires runtime contract 5 source; refusing contract ${Number.isFinite(value) ? value : "unknown"}`);
+  if (value !== 6) throw new Error(`workloop installer requires runtime contract 6 source; refusing contract ${Number.isFinite(value) ? value : "unknown"}`);
   return value;
 })();
 const HOST_HOOKS_SOURCE = fs.readFileSync(path.join(SOURCE, "lib", "host-hooks.mjs"), "utf8");
@@ -68,6 +69,52 @@ function exists(file) {
   } catch {
     return false;
   }
+}
+
+function inspectSourceTaskState(repo, fsOps = fs) {
+  const eventStore = path.join(repo, ".workloop", "events.jsonl");
+  if (exists(eventStore)) {
+    let current = null;
+    const bytes = fsOps.readFileSync(eventStore, "utf8");
+    if (bytes && !bytes.endsWith("\n")) throw new Error(`cannot verify active task contract from torn authority: ${eventStore}`);
+    for (const line of bytes.trim().split("\n").filter(Boolean)) {
+      let record;
+      try { record = JSON.parse(line); }
+      catch { throw new Error(`cannot verify active task contract from invalid authority: ${eventStore}`); }
+      if (!Array.isArray(record?.events)) throw new Error(`cannot verify active task contract from malformed authority: ${eventStore}`);
+      for (const event of record.events) {
+        if (event.kind === "task_opened") current = {
+          task_id: event.task_id,
+          runtime_contract: event.payload_version === 2 && event.payload?.runtime_contract === 6 ? 6 : 5,
+          lifecycle: "active",
+        };
+        else if (current && event.task_id === current.task_id && event.kind === "task_suspended") current.lifecycle = "suspended";
+        else if (current && event.task_id === current.task_id && ["task_resumed", "task_joined"].includes(event.kind)) current.lifecycle = "active";
+        else if (current && event.task_id === current.task_id && event.kind === "task_terminal") current.lifecycle = "terminal";
+      }
+    }
+    return current;
+  }
+  const snapshot = path.join(repo, ".workloop", "task.json");
+  if (!exists(snapshot)) return null;
+  let stored;
+  try { stored = JSON.parse(fsOps.readFileSync(snapshot, "utf8")); }
+  catch { throw new Error(`cannot verify active task contract from invalid snapshot: ${snapshot}`); }
+  const projection = stored?.projection;
+  if (!isPlainObject(projection) || !isPlainObject(projection.lifecycle)) throw new Error(`cannot verify active task contract from malformed snapshot: ${snapshot}`);
+  return {
+    task_id: projection.task_id ?? null,
+    runtime_contract: projection.runtime_contract === 6 ? 6 : 5,
+    lifecycle: projection.lifecycle.state,
+  };
+}
+
+function assertSourceActivationCompatible(repo, fsOps = fs) {
+  const task = inspectSourceTaskState(repo, fsOps);
+  if (task?.runtime_contract === 5 && task.lifecycle !== "terminal") {
+    throw new Error("active Contract 5 task blocks Contract 6 activation; finish or abandon it with the existing Contract 5 runtime first");
+  }
+  return task;
 }
 
 function walkFiles(root) {
@@ -698,10 +745,32 @@ function inspectClaudeHookProfile(home) {
   }
 }
 
-function pruneRuntimes(runtimeRoot, activeHash, dry) {
+function readReleaseManifest(home) {
+  try {
+    const parsed = JSON.parse(fs.readFileSync(path.join(home, "bin", ".workloop-active-release.json"), "utf8"));
+    return isPlainObject(parsed) ? parsed : null;
+  } catch {
+    return null;
+  }
+}
+
+function contract5CompatibilityPin(home) {
+  const manifest = readReleaseManifest(home);
+  const candidate = manifest?.runtime_contract === 5
+    ? manifest.runtime_digest
+    : manifest?.compatibility_runtimes?.contract_5 ?? null;
+  if (candidate === null || candidate === undefined) return null;
+  if (typeof candidate !== "string" || !RUNTIME_HASH_SHAPE.test(candidate)) throw new Error("invalid Contract 5 compatibility runtime pin");
+  const target = path.join(home, "bin", ".workloop-runtime", candidate);
+  if (!installedRuntimeVersionProvable(target, candidate)) throw new Error(`Contract 5 compatibility runtime is missing or corrupt: ${target}`);
+  return candidate;
+}
+
+function pruneRuntimes(runtimeRoot, activeHash, dry, preservedHashes = []) {
   if (!exists(runtimeRoot)) return;
+  const preserved = new Set([activeHash, ...preservedHashes].filter(Boolean));
   for (const name of fs.readdirSync(runtimeRoot).sort()) {
-    if (name === activeHash) continue;
+    if (preserved.has(name)) continue;
     const target = path.join(runtimeRoot, name);
     if (dry) {
       plan("remove", target);
@@ -759,7 +828,7 @@ function installWorkloopRuntimeUnlocked(repo, home, dry, { activate = true } = {
     if (activate) {
       // Activation is last, so every process sees one complete pinned runtime.
       activateRuntimeShims(home, hash, dry);
-      pruneRuntimes(runtimeRoot, hash, dry);
+      pruneRuntimes(runtimeRoot, hash, dry, [contract5CompatibilityPin(home)]);
     }
     return { hash, versionRoot };
   };
@@ -930,12 +999,18 @@ const CONTROL_FILE_SHAPES = {
       && Object.values(parsed.runtimes).every((skills) => isPlainObject(skills)
         && Object.entries(skills).every(([name, digest]) => SKILL_NAME_SHAPE.test(name) && typeof digest === "string" && TREE_DIGEST_SHAPE.test(digest)))),
   ".workloop-active-release.json": (parsed) => isPlainObject(parsed)
-    && parsed.release_manifest_version === 1
+    && [1, 2].includes(parsed.release_manifest_version)
     && typeof parsed.release_id === "string" && RUNTIME_HASH_SHAPE.test(parsed.release_id)
     && Number.isInteger(parsed.runtime_contract) && parsed.runtime_contract > 0
     && typeof parsed.runtime_digest === "string" && RUNTIME_HASH_SHAPE.test(parsed.runtime_digest)
     && (parsed.managed_skills_manifest_digest === null
-      || (typeof parsed.managed_skills_manifest_digest === "string" && TREE_DIGEST_SHAPE.test(parsed.managed_skills_manifest_digest))),
+      || (typeof parsed.managed_skills_manifest_digest === "string" && TREE_DIGEST_SHAPE.test(parsed.managed_skills_manifest_digest)))
+    && (parsed.release_manifest_version === 1 || (
+      isPlainObject(parsed.compatibility_runtimes)
+      && Object.keys(parsed.compatibility_runtimes).join(",") === "contract_5"
+      && (parsed.compatibility_runtimes.contract_5 === null
+        || (typeof parsed.compatibility_runtimes.contract_5 === "string" && RUNTIME_HASH_SHAPE.test(parsed.compatibility_runtimes.contract_5)))
+    )),
   ".workloop-activation-journal.json": (parsed) => isPlainObject(parsed)
     && parsed.journal_version === 1
     && typeof parsed.release_id === "string" && RUNTIME_HASH_SHAPE.test(parsed.release_id)
@@ -1102,6 +1177,8 @@ export function installWorkloopAssets(repo, home, dry = false) {
 export function installWorkloop(repo, home, dry = false) {
   ACTIONS.length = 0;
   const install = () => {
+    if (RUNTIME_CONTRACT === 6 && !INSTALL_HOME_EXPLICIT) assertSourceActivationCompatible(repo);
+    const compatibilityContract5 = contract5CompatibilityPin(home);
     const runtime = installWorkloopRuntimeUnlocked(repo, home, dry, { activate: false });
     const releaseId = runtime.hash;
     const journal = path.join(home, "bin", ".workloop-activation-journal.json");
@@ -1130,11 +1207,12 @@ export function installWorkloop(repo, home, dry = false) {
     installFailpoint("shim-activated");
     const skillManifest = path.join(home, "bin", ".workloop-managed-skills.json");
     const manifestRow = {
-      release_manifest_version: 1,
+      release_manifest_version: 2,
       release_id: releaseId,
       runtime_contract: RUNTIME_CONTRACT,
       runtime_digest: runtime.hash,
       managed_skills_manifest_digest: dry || !exists(skillManifest) ? null : createHash("sha256").update(fs.readFileSync(skillManifest)).digest("hex"),
+      compatibility_runtimes: { contract_5: compatibilityContract5 },
     };
     writeTextAtomicIfChanged(releaseManifest, JSON.stringify(manifestRow, null, 2) + "\n", dry);
     journalRow.steps.manifest_committed = true;
@@ -1143,7 +1221,7 @@ export function installWorkloop(repo, home, dry = false) {
     installFailpoint("manifest-committed");
     if (!dry) fs.rmSync(journal, { force: true });
     installFailpoint("journal-cleaned");
-    pruneRuntimes(path.join(home, "bin", ".workloop-runtime"), runtime.hash, dry);
+    pruneRuntimes(path.join(home, "bin", ".workloop-runtime"), runtime.hash, dry, [compatibilityContract5]);
     return runtime;
   };
   return dry ? install() : withInstallLock(home, install);
@@ -1232,6 +1310,8 @@ export function invokedAsScript(moduleUrl) {
   };
   return resolve(entry) === resolve(fileURLToPath(moduleUrl));
 }
+
+export { assertSourceActivationCompatible, inspectSourceTaskState };
 
 if (invokedAsScript(import.meta.url)) {
   process.exit(main());

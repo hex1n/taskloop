@@ -23,12 +23,14 @@ test("roadmap E2E: dedicated criterion, host anchors, actual-use floor, and ledg
   spawnSync("git", ["-c", "user.name=t", "-c", "user.email=t@t", "commit", "-qm", "fixture"], { cwd: repo });
   const env = { ...process.env, TZ: "UTC", HOME: home, USERPROFILE: home, WORKLOOP_SESSION_ID: "", WORKLOOP_ACTING_SESSION_ID: "", CLAUDE_CODE_SESSION_ID: "", CODEX_THREAD_ID: "" };
 
-  const opened = run(["open", "--repo", repo, "--goal", "roadmap e2e", "--criterion-file", "check.mjs", "--criterion-protocol", "tri-state", "--criterion-policy", "default", "--criterion-timeout-seconds", "5", "--alignment-because", "live roadmap chain", "--files", "work.txt", "--risk", "routine", "--risk-reason", "fixture"], { env });
+  const opened = run(["open", "--repo", repo, "--goal", "roadmap e2e", "--criterion-file", "check.mjs", "--criterion-protocol", "tri-state", "--criterion-policy", "default", "--criterion-timeout-seconds", "5", "--alignment-because", "live roadmap chain", "--files", "work.txt", "--files", "done", "--history-requirement", "artifact-only", "--risk", "routine", "--risk-reason", "fixture"], { env });
   assert.equal(opened.status, 0, opened.stderr); assert.match(opened.stdout, /criterion unsatisfied/);
 
-  const write = run(["hook", "--profile", "claude", "--mode", "nudge"], { cwd: repo, env, input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: repo, session_id: "owner", agent_id: "child", permission_mode: "bypassPermissions", tool_name: "Write", tool_input: { file_path: path.join(repo, "work.txt") } }) });
+  const write = run(["hook", "--profile", "claude", "--mode", "nudge"], { cwd: repo, env, input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: repo, session_id: "owner", agent_id: "child", tool_use_id: "roadmap-operation", permission_mode: "bypassPermissions", tool_name: "Write", tool_input: { file_path: path.join(repo, "done") } }) });
   assert.equal(write.status, 0, write.stderr); assert.equal(write.stdout, "");
   fs.writeFileSync(path.join(repo, "done"), "yes\n");
+  const post = run(["hook", "--profile", "claude", "--mode", "nudge"], { cwd: repo, env, input: JSON.stringify({ hook_event_name: "PostToolUse", cwd: repo, session_id: "owner", agent_id: "child", tool_use_id: "roadmap-operation", permission_mode: "bypassPermissions", tool_name: "Write", tool_input: { file_path: path.join(repo, "done") }, tool_response: { success: true } }) });
+  assert.equal(post.status, 0, post.stderr); assert.equal(post.stdout, "");
 
   const stopped = run(["hook", "--profile", "claude", "--mode", "nudge"], { cwd: repo, env, input: JSON.stringify({ hook_event_name: "Stop", cwd: repo, session_id: "owner", agent_id: "child", permission_mode: "bypassPermissions" }) });
   assert.equal(stopped.status, 0, stopped.stderr); assert.match(stopped.stderr, /terminal\(achieved\)/);

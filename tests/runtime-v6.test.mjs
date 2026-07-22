@@ -13,6 +13,9 @@ import { buildTaskSnapshot, validateTaskSnapshot } from "../lib/task-store.mjs";
 import { artifactAssuranceHolds, assertV3TaskProjection, closureProjection, decide, evolve, evolveAll } from "../lib/task-engine.mjs";
 import {
   EVENT_PAYLOAD_FIELDS_BY_VERSION,
+  RUNTIME_CONTRACT,
+  V3_OUTCOME_PROJECTION_SCHEMA_VERSION,
+  V3_RUNTIME_CONTRACT,
   artifactCheckpointId,
   eventPayloadFields,
 } from "../lib/prims.mjs";
@@ -21,6 +24,8 @@ import {
   RUNTIME6_EVENT_PAYLOAD_FIELDS,
   RUNTIME6_INFO,
 } from "./fixtures/runtime-contract-6.mjs";
+import { RUNTIME5_EVENT_KINDS, RUNTIME5_EVENT_PAYLOAD_FIELDS } from "./fixtures/runtime-contract-5.mjs";
+import { makeTaskOpenedCommand } from "./helpers/event-v3-fixture.mjs";
 
 const ROOT = path.resolve(".");
 const CLI = path.join(ROOT, "bin", "workloop.mjs");
@@ -69,6 +74,12 @@ function openCommand() {
 }
 
 test("Contract 6 freezes independent version boundaries without rewriting Contract 5", () => {
+  assert.deepEqual({ runtime: RUNTIME_CONTRACT, persistedTask: V3_RUNTIME_CONTRACT, outcome: V3_OUTCOME_PROJECTION_SCHEMA_VERSION }, {
+    runtime: 6, persistedTask: 5, outcome: 4,
+  });
+  assert.equal(RUNTIME5_EVENT_KINDS.includes("tool_completed"), false);
+  assert.equal(RUNTIME5_EVENT_KINDS.includes("artifact_reconciled"), false);
+  assert.equal(RUNTIME5_EVENT_PAYLOAD_FIELDS.task_opened.includes("runtime_contract"), false);
   assert.deepEqual(RUNTIME6_INFO, {
     runtime_contract: 6,
     task_snapshot_schema_version: 3,
@@ -79,6 +90,32 @@ test("Contract 6 freezes independent version boundaries without rewriting Contra
     outcome_projection: "~/.workloop/outcomes.jsonl",
   });
   assert.equal(digest(path.join(ROOT, "tests", "fixtures", "runtime-contract-5.mjs")), CONTRACT5_SHA256);
+});
+
+test("[W04] runtime 6 keeps active Contract 5 read-only except explicit abandon", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-v6-legacy-active-"));
+  const repo = path.join(root, "repo"); const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(repo, ".git"), { recursive: true }); fs.mkdirSync(path.join(repo, ".workloop")); fs.mkdirSync(home);
+  fs.writeFileSync(path.join(repo, "check.mjs"), "process.exit(1);\n"); fs.writeFileSync(path.join(repo, "work.txt"), "legacy\n");
+  const command = { ...makeTaskOpenedCommand({ seed: "runtime-v6-legacy", atEpochMs: Date.parse(AT) }), runtimeContract: 5 };
+  const event = decide(null, command).events[0];
+  const record = buildRecord({
+    transactionId: randomUUID(), repoSequence: 1, occurredAtEpochMs: Date.parse(AT),
+    actor: { kind: "cli", session_id: command.actingSession }, previousRecordDigest: null,
+    events: [{ ...event, task_event_sequence: 1 }],
+  });
+  fs.writeFileSync(path.join(repo, ".workloop", "events.jsonl"), `${JSON.stringify(record)}\n`);
+  const env = { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_SESSION_ID: command.actingSession };
+  const run = (args) => spawnSync(process.execPath, [CLI, ...args], { cwd: repo, env, encoding: "utf8" });
+  const status = run(["status", "--repo", repo]);
+  assert.equal(status.status, 0, status.stderr); assert.equal(JSON.parse(status.stdout).write_evidence, undefined);
+  assert.equal(run(["report", "--repo", repo, "--json"]).status, 0);
+  const suspended = run(["suspend", "--repo", repo, "--reason", "needs_input", "--remaining", "legacy", "--failure", "compat", "--next-action", "old runtime"]);
+  assert.equal(suspended.status, 2); assert.match(suspended.stderr, /active Contract 5 task is read-only/);
+  const abandoned = run(["abandon", "--repo", repo, "--reason", "explicit compatibility exit"]);
+  assert.equal(abandoned.status, 0, abandoned.stderr);
+  assert.deepEqual(JSON.parse(run(["status", "--repo", repo]).stdout).lifecycle.state, "terminal");
 });
 
 test("payload contracts dispatch by event kind and payload version", () => {
@@ -327,6 +364,67 @@ test("operation completion and reconciliation are exactly-once as one decision",
   assert.equal(state.artifact_revision, 1);
 });
 
+test("orphan and conflicting completion receipts fail closed without rewriting facts", () => {
+  const strictCommand = openCommand();
+  strictCommand.coverageBasis = { history_requirement: "complete", artifact_state: "full", mutation_history: "full", prewrite_enforcement: "full" };
+  let state = evolveAll(null, decide(null, strictCommand).events);
+  state = evolveAll(state, decide(state, {
+    type: "authorize-write", taskId: state.task_id, at: "2026-07-22T00:00:01.000Z", decision: "allow",
+    files: ["work.txt"], operationId: "conflict-operation", toolFamily: "patch", hostProfile: "fixture",
+    targetCoverage: "exact", receiptExpectation: "post",
+  }).events);
+  const complete = {
+    type: "complete-operation", taskId: state.task_id, at: "2026-07-22T00:00:02.000Z",
+    operationId: "conflict-operation", toolFamily: "patch", outcome: "success", reportedTargets: ["work.txt"],
+    receiptQuality: "tool_specific", hostProfile: "fixture", checkpointId: EMPTY_CHECKPOINT,
+    fromCheckpoint: EMPTY_CHECKPOINT, toCheckpoint: EMPTY_CHECKPOINT, changedEntries: [], changedPaths: [],
+    currentScopeViolations: [], coverage: "full", reason: "first receipt",
+    coverageChange: {
+      artifactState: "full", mutationHistory: "full", prewriteEnforcement: "full",
+      episodeId: state.episodes.at(-1).episode_id, hostProfile: "fixture", surface: "direct", exhaustiveSurface: true,
+      effectiveFromCheckpoint: EMPTY_CHECKPOINT, intervalFromCheckpoint: EMPTY_CHECKPOINT,
+      intervalToCheckpoint: EMPTY_CHECKPOINT, reason: "trusted fixture receipt",
+    },
+  };
+  state = evolveAll(state, decide(state, complete).events);
+  assert.equal(state.operations["conflict-operation"].completion.outcome, "success");
+  assert.equal(state.evidence.mutation_history_coverage, "full");
+
+  const conflict = decide(state, {
+    ...complete, at: "2026-07-22T00:00:03.000Z", outcome: "failure", reason: "conflicting receipt",
+    coverageChange: { ...complete.coverageChange, mutationHistory: "full", prewriteEnforcement: "full", reason: "conflicting fixture receipt" },
+  });
+  assert.equal(conflict.result.status, "conflict");
+  assert.equal(conflict.events.some((event) => event.kind === "tool_completed"), false);
+  state = evolveAll(state, conflict.events);
+  assert.equal(state.operations["conflict-operation"].completion.outcome, "success");
+  assert.equal(state.evidence.mutation_history_coverage, "unknown");
+  assert.equal(state.authority.prewrite_enforcement, "unknown");
+
+  const orphanCommand = openCommand();
+  let orphan = evolveAll(null, decide(null, orphanCommand).events);
+  const orphanReceipt = decide(orphan, {
+    type: "complete-operation", taskId: orphan.task_id, at: "2026-07-22T00:00:04.000Z",
+    operationId: "orphan-operation", toolFamily: "patch", outcome: "unknown", reportedTargets: ["orphan.txt"],
+    receiptQuality: "unknown", hostProfile: "fixture", checkpointId: NEXT_CHECKPOINT,
+    fromCheckpoint: EMPTY_CHECKPOINT, toCheckpoint: NEXT_CHECKPOINT,
+    changedEntries: [{ path: "work.txt", before: null, after: FILE_DIGEST }], changedPaths: ["work.txt"],
+    currentScopeViolations: [], coverage: "full", reason: "orphan receipt",
+    coverageChange: {
+      artifactState: "full", mutationHistory: "unknown", prewriteEnforcement: "unknown",
+      episodeId: orphan.episodes.at(-1).episode_id, operationId: "orphan-operation", capabilityId: "hostcap:v1:orphan",
+      hostProfile: "fixture", surface: "direct", exhaustiveSurface: false,
+      effectiveFromCheckpoint: EMPTY_CHECKPOINT, intervalFromCheckpoint: EMPTY_CHECKPOINT,
+      intervalToCheckpoint: NEXT_CHECKPOINT, reason: "orphan receipt",
+    },
+  });
+  orphan = evolveAll(orphan, orphanReceipt.events);
+  assert.equal(orphan.authority.write_operations_authorized, 0);
+  assert.equal(orphan.evidence.tool_completions_observed, 1);
+  assert.equal(orphan.operations["orphan-operation"].authorization, null);
+  assert.equal(orphan.evidence.mutation_history_coverage, "unknown");
+});
+
 test("outcome schema 4 preserves terminal count basis and coverage", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-v6-outcome-"));
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -469,6 +567,67 @@ test("PreToolUse and PostToolUse persist one correlated operation and landed art
     artifact_changes: ledger.metrics.artifact_changes,
     touched: ledger.metrics.touched_files,
   }, { writes: 1, basis: "authorized", completions: 1, artifact_changes: 1, touched: 1 });
+});
+
+test("failure receipts, partial writes, and scan failures degrade without losing correlation", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-v6-failure-receipts-"));
+  const repo = path.join(root, "repo"); const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(repo, ".git"), { recursive: true }); fs.mkdirSync(home, { recursive: true });
+  const command = openCommand(); command.episodes[0].host_session_id = "owner-v6";
+  const event = decide(null, command).events[0];
+  const record = buildRecord({
+    transactionId: randomUUID(), repoSequence: 1, occurredAtEpochMs: Date.parse(AT),
+    actor: { kind: "cli", session_id: "owner-v6" }, previousRecordDigest: null,
+    events: [{ ...event, task_event_sequence: 1 }],
+  });
+  fs.mkdirSync(path.join(repo, ".workloop"));
+  fs.writeFileSync(path.join(repo, ".workloop", "events.jsonl"), `${JSON.stringify(record)}\n`);
+  const env = { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_SESSION_ID: "owner-v6" };
+  const hook = (payload, extraEnv = {}) => spawnSync(process.execPath, [CLI, "hook", "--profile", "claude", "--mode", "nudge"], {
+    cwd: repo, env: { ...env, ...extraEnv }, input: JSON.stringify(payload), encoding: "utf8",
+  });
+  const pre = (operationId, file) => hook({
+    hook_event_name: "PreToolUse", cwd: repo, session_id: "owner-v6", tool_use_id: operationId,
+    tool_name: "Write", tool_input: { file_path: path.join(repo, file) },
+  });
+  const failure = (operationId, file, extraEnv = {}) => hook({
+    hook_event_name: "PostToolUseFailure", cwd: repo, session_id: "owner-v6", tool_use_id: operationId,
+    tool_name: "Write", tool_input: { file_path: path.join(repo, file) }, error: { code: "fixture_failure" },
+  }, extraEnv);
+
+  assert.equal(pre("failure-no-write", "no-write.txt").status, 0);
+  assert.equal(failure("failure-no-write", "no-write.txt").status, 0);
+  let state = JSON.parse(fs.readFileSync(path.join(repo, ".workloop", "task.json"), "utf8")).projection;
+  assert.equal(state.operations["failure-no-write"].completion.outcome, "failure");
+  assert.equal(state.artifact_revision, 0);
+
+  assert.equal(pre("failure-after-write", "partial.txt").status, 0);
+  fs.writeFileSync(path.join(repo, "partial.txt"), "partial result\n");
+  assert.equal(failure("failure-after-write", "partial.txt").status, 0);
+  state = JSON.parse(fs.readFileSync(path.join(repo, ".workloop", "task.json"), "utf8")).projection;
+  assert.equal(state.operations["failure-after-write"].completion.outcome, "failure");
+  assert.equal(state.artifact_revision, 1);
+  assert.ok(state.evidence.touched_files.includes("partial.txt"));
+
+  assert.equal(pre("scan-timeout", "late.txt").status, 0);
+  fs.writeFileSync(path.join(repo, "late.txt"), "not yet reconciled\n");
+  const timedOut = hook({
+    hook_event_name: "PostToolUse", cwd: repo, session_id: "owner-v6", tool_use_id: "scan-timeout",
+    tool_name: "Write", tool_input: { file_path: path.join(repo, "late.txt") }, tool_response: { success: true },
+  }, { WORKLOOP_POST_SNAPSHOT_DEADLINE_MS: "0" });
+  assert.equal(timedOut.status, 0, timedOut.stderr); assert.equal(timedOut.stdout, "");
+  state = JSON.parse(fs.readFileSync(path.join(repo, ".workloop", "task.json"), "utf8")).projection;
+  assert.equal(state.operations["scan-timeout"].completion.outcome, "unknown");
+  assert.equal(state.evidence.artifact_state_coverage, "unknown");
+  assert.equal(state.evidence.touched_files.includes("late.txt"), false);
+
+  const reconciled = spawnSync(process.execPath, [CLI, "achieve", "--repo", repo], { cwd: repo, env, encoding: "utf8" });
+  assert.equal(reconciled.status, 2);
+  state = JSON.parse(fs.readFileSync(path.join(repo, ".workloop", "task.json"), "utf8")).projection;
+  assert.equal(state.evidence.artifact_state_coverage, "full");
+  assert.ok(state.evidence.touched_files.includes("late.txt"));
+  assert.equal(state.evidence.mutation_history_coverage, "unknown");
 });
 
 test("achieved and not-needed share Contract 6 artifact assurance", () => {

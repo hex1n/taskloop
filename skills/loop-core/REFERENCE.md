@@ -259,20 +259,30 @@ the host hook payload's domain. Per-host binding mechanics are in
 
 ## State, projection, and hard cutover
 
-Runtime contract 5 treats `.workloop/events.jsonl` as the only repository
+Runtime contract 6 treats `.workloop/events.jsonl` as the only repository
 authority. `task.json` is a disposable schema-v3 snapshot; missing or damaged
 snapshots rebuild from the event genesis, while internal event corruption fails
-closed. Schema-2 and orphan/mixed snapshots are never interpreted or migrated.
+closed. Contract 6 task projections use persisted task runtime contract 5 and
+event record framing remains schema 2. Schema-2 and orphan/mixed snapshots are
+never interpreted or migrated.
 
-Contract 5 removes schema versions from active artifact names, not from their
-content. If the runtime reports legacy versioned names, preserve both names and
+Write evidence is intentionally split: PreToolUse records authorization,
+PostToolUse/PostToolUseFailure records a correlated completion receipt,
+repository reconciliation records landed artifact changes, and coverage states
+how complete the history is. Never infer an artifact mutation from an
+authorization count. With `history_requirement=complete`, incomplete host
+surfaces fail closed; `artifact_only` permits closure from full current artifact
+state while reporting mutation history as partial or unknown.
+
+Contract 5 removed schema versions from active artifact names; Contract 6 keeps
+those stable names. If the runtime reports legacy versioned names, preserve both names and
 run `migrate-artifact-names --repo <repo> --reason <reason> --granted-by user`;
 it refuses ambiguous dual-name authority.
 Preserve an incompatible snapshot byte-for-byte with explicit authorization:
 
 ```text
 workloop archive-incompatible-state --repo <repo> \
-  --reason "runtime-contract-5 hard cutover" --granted-by user
+  --reason "runtime-contract-6 hard cutover" --granted-by user
 ```
 
 The runtime projects repository events to `~/.workloop/outcomes.jsonl` on a
@@ -282,7 +292,7 @@ the HOME projection with `audit-outcomes`. A HOME failure never rolls back a
 committed repository event. Runtime contract 3 is not a rollback target.
 
 Old `outcomes-v2.jsonl`, `transcript-cursors.json`, and `history/` artifacts are
-non-authoritative diagnostics: runtime 5 ignores them and never auto-deletes
+non-authoritative diagnostics: runtime 6 ignores them and never auto-deletes
 them.
 
 Git mutations still require explicit user intent and an envelope grant.

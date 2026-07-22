@@ -164,7 +164,7 @@ function fixture(t) {
 }
 
 function open(fx, policy = "default", extra = []) {
-  return run(["open", "--repo", fx.repo, "--goal", "finish", "--criterion-file", "check.mjs", "--criterion-policy", policy, ...(policy === "default" ? [] : ["--reason", "policy reason"]), "--criterion-timeout-seconds", "5", "--alignment-because", "the checker exercises the result", "--not-covered", "deployment", "--files", "work.txt", "--risk", "routine", "--risk-reason", "isolated reversible fixture", ...extra], { env: fx.env });
+  return run(["open", "--repo", fx.repo, "--goal", "finish", "--criterion-file", "check.mjs", "--criterion-policy", policy, ...(policy === "default" ? [] : ["--reason", "policy reason"]), "--criterion-timeout-seconds", "5", "--alignment-because", "the checker exercises the result", "--not-covered", "deployment", "--files", "work.txt", "--files", "done", "--risk", "routine", "--risk-reason", "isolated reversible fixture", "--history-requirement", "artifact-only", ...extra], { env: fx.env });
 }
 
 function observation(verdict, generation = "g1", artifact = 0) {
@@ -573,9 +573,9 @@ test("CLI steady-satisfied Stop never auto closes and achieve does", (t) => {
   assert.equal(run(["achieve", "--repo", fx.repo], { env: fx.env }).status, 0);
 });
 
-test("CLI public vocabulary is clean break and info is contract 5", () => {
+test("CLI public vocabulary is clean break and info is contract 6", () => {
   const help = run(["help"]); assert.equal(help.status, 0); assert.doesNotMatch(help.stdout, /earn-red|keep-green|\bdone\b|\bred\b|\bgreen\b|--provisional|weak_sensor_unreviewed/);
-  const info = JSON.parse(run(["info"]).stdout); assert.equal(info.runtime_contract, 5); assert.equal(info.task_snapshot_schema_version, 3); assert.equal(info.event_record_schema_version, 2); assert.equal(info.outcome_projection_schema_version, 3); assert.equal(info.outcome_projection, "~/.workloop/outcomes.jsonl");
+  const info = JSON.parse(run(["info"]).stdout); assert.equal(info.runtime_contract, 6); assert.equal(info.task_snapshot_schema_version, 3); assert.equal(info.event_record_schema_version, 2); assert.equal(info.outcome_projection_schema_version, 4); assert.equal(info.outcome_projection, "~/.workloop/outcomes.jsonl");
   assert.notEqual(run(["open", "--earn-red"]).status, 0); assert.notEqual(run(["done"]).status, 0);
 });
 
@@ -599,7 +599,7 @@ test("CLI review maps kebab enums and enforces finding counts", (t) => {
 
 test("CLI critical strong criterion requires a current second-model review", (t) => {
   const fx = fixture(t); fs.writeFileSync(path.join(fx.repo, "done"), "yes\n");
-  const opened = run(["open", "--repo", fx.repo, "--goal", "critical contract", "--criterion-file", "check.mjs", "--criterion-policy", "steady-satisfied", "--reason", "guard", "--alignment-because", "probe", "--files", "work.txt", "--risk", "critical", "--risk-reason", "public API", "--change-class", "public-contract"], { env: fx.env });
+  const opened = run(["open", "--repo", fx.repo, "--goal", "critical contract", "--criterion-file", "check.mjs", "--criterion-policy", "steady-satisfied", "--reason", "guard", "--alignment-because", "probe", "--files", "work.txt", "--files", "done", "--history-requirement", "artifact-only", "--risk", "critical", "--risk-reason", "public API", "--change-class", "public-contract"], { env: fx.env });
   assert.equal(opened.status, 0, opened.stderr);
   let status = JSON.parse(run(["status", "--repo", fx.repo], { env: fx.env }).stdout);
   assert.equal(status.assurance.risk_declared_by, "self");
@@ -612,10 +612,13 @@ test("CLI critical strong criterion requires a current second-model review", (t)
 
 test("CLI proof acceptance, waiver, defaults and grant floors stay independent", (t) => {
   const weak = fixture(t); fs.writeFileSync(path.join(weak.repo, "done"), "yes\n");
-  let result = run(["open", "--repo", weak.repo, "--goal", "weak routine", "--criterion-file", "check.mjs", "--criterion-policy", "steady-satisfied", "--reason", "guard", "--alignment-because", "probe", "--files", "work.txt", "--risk", "routine", "--risk-reason", "small reversible"], { env: weak.env });
+  let result = run(["open", "--repo", weak.repo, "--goal", "weak routine", "--criterion-file", "check.mjs", "--criterion-policy", "steady-satisfied", "--reason", "guard", "--alignment-because", "probe", "--files", "work.txt", "--files", "done", "--history-requirement", "artifact-only", "--risk", "routine", "--risk-reason", "small reversible"], { env: weak.env });
   assert.equal(result.status, 0, result.stderr);
-  const writePayload = JSON.stringify({ hook_event_name: "PreToolUse", cwd: weak.repo, tool_name: "Write", tool_input: { file_path: path.join(weak.repo, "work.txt") } });
+  const writePayload = JSON.stringify({ hook_event_name: "PreToolUse", cwd: weak.repo, tool_use_id: "weak-operation", tool_name: "Write", tool_input: { file_path: path.join(weak.repo, "work.txt") } });
   assert.equal(run(["hook", "--profile", "claude"], { cwd: weak.repo, env: weak.env, input: writePayload }).status, 0);
+  fs.writeFileSync(path.join(weak.repo, "work.txt"), "changed\n");
+  const writePost = JSON.stringify({ hook_event_name: "PostToolUse", cwd: weak.repo, tool_use_id: "weak-operation", tool_name: "Write", tool_input: { file_path: path.join(weak.repo, "work.txt") }, tool_response: { success: true } });
+  assert.equal(run(["hook", "--profile", "claude"], { cwd: weak.repo, env: weak.env, input: writePost }).status, 0);
   const amendedWeak = run(["amend", "--repo", weak.repo, "--criterion-file", "check.mjs", "--reason", "checker changed after work"], { env: weak.env });
   assert.equal(amendedWeak.status, 0, amendedWeak.stderr);
   assert.match(run(["achieve", "--repo", weak.repo], { env: weak.env }).stderr, /criterion_assurance_gap/);
@@ -628,7 +631,7 @@ test("CLI proof acceptance, waiver, defaults and grant floors stay independent",
   assert.equal(JSON.parse(run(["status", "--repo", defaultRisk.repo], { env: defaultRisk.env }).stdout).review_requirement.level, "fresh_context");
 
   const waived = fixture(t); fs.writeFileSync(path.join(waived.repo, "done"), "yes\n");
-  result = run(["open", "--repo", waived.repo, "--goal", "waived", "--criterion-file", "check.mjs", "--criterion-policy", "steady-satisfied", "--reason", "guard", "--alignment-because", "probe", "--files", "work.txt", "--review-policy", "waived", "--review-waiver-reason", "user accepts review cost"], { env: waived.env });
+  result = run(["open", "--repo", waived.repo, "--goal", "waived", "--criterion-file", "check.mjs", "--criterion-policy", "steady-satisfied", "--reason", "guard", "--alignment-because", "probe", "--files", "work.txt", "--files", "done", "--history-requirement", "artifact-only", "--review-policy", "waived", "--review-waiver-reason", "user accepts review cost"], { env: waived.env });
   assert.equal(result.status, 0, result.stderr); const waivedClose = run(["achieve", "--repo", waived.repo], { env: waived.env }); assert.equal(waivedClose.status, 0); assert.match(waivedClose.stdout, /review waived: user accepts review cost \(self\)/);
   const waiverEvents = fs.readFileSync(path.join(waived.home, ".workloop", "outcomes.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
   const waiverAssurance = waiverEvents.find((row) => row.kind === "task_opened").payload.assurance;
@@ -641,8 +644,12 @@ test("CLI proof acceptance, waiver, defaults and grant floors stay independent",
 
 test("automatic Stop echoes accepted review advisories on stderr without changing release stdout", (t) => {
   const fx = fixture(t); assert.equal(open(fx, "default", ["--review-policy", "required", "--required-review-level", "fresh-context"]).status, 0);
-  assert.equal(run(["review", "--repo", fx.repo, "--level", "fresh-context", "--reviewer", "peer", "--blocking-findings", "0", "--advisory-findings", "2"], { env: fx.env }).status, 0);
+  const pre = JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, tool_use_id: "advisory-operation", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "done") } });
+  assert.equal(run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: pre }).status, 0);
   fs.writeFileSync(path.join(fx.repo, "done"), "yes\n");
+  const post = JSON.stringify({ hook_event_name: "PostToolUse", cwd: fx.repo, tool_use_id: "advisory-operation", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "done") }, tool_response: { success: true } });
+  assert.equal(run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: post }).status, 0);
+  assert.equal(run(["review", "--repo", fx.repo, "--level", "fresh-context", "--reviewer", "peer", "--blocking-findings", "0", "--advisory-findings", "2"], { env: fx.env }).status, 0);
   const stopped = run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo }) });
   assert.equal(stopped.stdout, ""); assert.match(stopped.stderr, /terminal\(achieved\).*advisory findings: 2/);
 });
@@ -819,8 +826,10 @@ test("episode-less authority changes retain the injected acting agent", (t) => {
   const fx = fixture(t);
   const env = { ...fx.env, WORKLOOP_SESSION_ID: "owner", WORKLOOP_ACTING_SESSION_ID: "child-agent" };
   assert.equal(open({ ...fx, env }).status, 0);
-  const authorized = run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, session_id: "owner", agent_id: "child-agent", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") } }) });
+  const authorized = run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, session_id: "owner", agent_id: "child-agent", tool_use_id: "episode-less-operation", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") } }) });
   assert.equal(authorized.stdout, "");
+  fs.writeFileSync(path.join(fx.repo, "work.txt"), "changed\n");
+  assert.equal(run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "PostToolUse", cwd: fx.repo, session_id: "owner", agent_id: "child-agent", tool_use_id: "episode-less-operation", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") }, tool_response: { success: true } }) }).status, 0);
   assert.equal(run(["amend", "--repo", fx.repo, "--criterion-file", "check.mjs", "--reason", "agent refinement"], { env }).status, 0);
   assert.equal(run(["accept-proof-gap", "--repo", fx.repo, "--reason", "user accepts remaining proof limits", "--granted-by", "user"], { env }).status, 0);
   const records = fs.readFileSync(path.join(fx.repo, ".workloop", "events.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
@@ -1099,13 +1108,17 @@ test("ledger exposes user authority claims as unanchored", (t) => {
   const opened = run([
     "open", "--repo", fx.repo, "--goal", "authority claims", "--criterion-file", "check.mjs", "--criterion-policy", "default",
     "--alignment-because", "the checker exercises the result", "--files", "work.txt",
+    "--history-requirement", "artifact-only",
     "--risk", "critical", "--risk-reason", "user declared public impact",
     "--review-policy", "waived", "--review-waiver-reason", "user accepts review residual",
     "--criterion-authored-by", "user", "--network-allowed", "--granted-by", "user", "--reason", "user approved network authority",
   ], { env: agentEnv });
   assert.equal(opened.status, 0, opened.stderr);
-  const writePayload = JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") } });
+  const writePayload = JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, tool_use_id: "claim-operation", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") } });
   assert.equal(run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: writePayload }).status, 0);
+  fs.writeFileSync(path.join(fx.repo, "work.txt"), "changed\n");
+  const postPayload = JSON.stringify({ hook_event_name: "PostToolUse", cwd: fx.repo, tool_use_id: "claim-operation", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") }, tool_response: { success: true } });
+  assert.equal(run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: postPayload }).status, 0);
   const amended = run(["amend", "--repo", fx.repo, "--criterion-file", "check.mjs", "--reason", "checker amended after write"], { env: agentEnv });
   assert.equal(amended.status, 0, amended.stderr);
   const userRiskReason = run(["amend", "--repo", fx.repo, "--risk", "critical", "--risk-reason", "user clarified same critical risk", "--granted-by", "user", "--reason", "record user risk clarification"], { env: agentEnv });
@@ -1130,9 +1143,15 @@ test("ledger exposes per-task terminal write sets for the post-close join", (t) 
   assert.equal(open(fx).status, 0);
   const write = run(["hook", "--profile", "claude"], {
     cwd: fx.repo, env: fx.env,
-    input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") } }),
+    input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, tool_use_id: "terminal-set-operation", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") } }),
   });
   assert.equal(write.status, 0, write.stderr);
+  fs.writeFileSync(path.join(fx.repo, "work.txt"), "changed\n");
+  const post = run(["hook", "--profile", "claude"], {
+    cwd: fx.repo, env: fx.env,
+    input: JSON.stringify({ hook_event_name: "PostToolUse", cwd: fx.repo, tool_use_id: "terminal-set-operation", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") }, tool_response: { success: true } }),
+  });
+  assert.equal(post.status, 0, post.stderr);
   const abandoned = run(["abandon", "--repo", fx.repo, "--reason", "join fixture complete"], { env: fx.env });
   assert.equal(abandoned.status, 0, abandoned.stderr);
   const ledger = JSON.parse(run(["ledger", "--json", "--repo", fx.repo], { env: fx.env }).stdout);
@@ -1764,8 +1783,10 @@ test("a write between stops resets the no-progress counter", (t) => {
   assert.equal(open(fx, "default", ["--rounds", "20"]).status, 0);
   const stop = () => run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo }) });
   for (let attempt = 0; attempt < 6; attempt += 1) assert.match(stop().stdout, /"decision":"block"/);
-  const write = run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt"), content: "more\n" } }) });
+  const write = run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, tool_use_id: "progress-operation", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt"), content: "more\n" } }) });
   assert.equal(write.status, 0, write.stderr);
+  fs.writeFileSync(path.join(fx.repo, "work.txt"), "more\n");
+  assert.equal(run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "PostToolUse", cwd: fx.repo, tool_use_id: "progress-operation", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") }, tool_response: { success: true } }) }).status, 0);
   const afterWrite = stop();
   assert.match(afterWrite.stdout, /"decision":"block"/); assert.doesNotMatch(afterWrite.stdout, /suspended/);
   assert.equal(loadTask(fx.repo).lifecycle.state, "active");
@@ -1796,7 +1817,7 @@ test("a satisfied adjudication between stops resets the no-progress streak", (t)
 test("judgment loop: rubric-bearing tri-state adapter opens unsatisfied and closes only by explicit achieve", (t) => {
   const fx = fixture(t);
   fs.writeFileSync(path.join(fx.repo, "acceptance.mjs"), "// rubric: clear, concrete, honest\nimport fs from 'node:fs';\nlet verdict = '';\ntry { verdict = fs.readFileSync('verdict.txt', 'utf8').trim(); } catch {}\nif (verdict === 'accepted') process.exit(4);\nif (verdict === '' || verdict === 'pending') { console.log('WORKLOOP_CRITERION: acceptance does not hold yet'); process.exit(3); }\nconsole.log('cannot adjudicate: ' + verdict); process.exit(2);\n");
-  const opened = run(["open", "--repo", fx.repo, "--goal", "taste deliverable", "--criterion-file", "acceptance.mjs", "--criterion-protocol", "tri-state", "--criterion-policy", "steady-satisfied", "--reason", "human acceptance closes explicitly", "--criterion-timeout-seconds", "5", "--alignment-because", "the adapter reads the recorded human verdict against the embedded rubric", "--not-covered", "taste quality itself", "--files", "draft.txt", "--risk", "routine", "--risk-reason", "isolated fixture"], { env: fx.env });
+  const opened = run(["open", "--repo", fx.repo, "--goal", "taste deliverable", "--criterion-file", "acceptance.mjs", "--criterion-protocol", "tri-state", "--criterion-policy", "steady-satisfied", "--reason", "human acceptance closes explicitly", "--criterion-timeout-seconds", "5", "--alignment-because", "the adapter reads the recorded human verdict against the embedded rubric", "--not-covered", "taste quality itself", "--files", "draft.txt", "--files", "verdict.txt", "--risk", "routine", "--risk-reason", "isolated fixture"], { env: fx.env });
   assert.equal(opened.status, 0, opened.stderr);
   assert.match(opened.stdout, /criterion unsatisfied/);
   const stop = () => run(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "Stop", cwd: fx.repo }) });
@@ -1846,20 +1867,22 @@ test("report emits a machine-generated closeout artifact", (t) => {
 test("Markdown report renders every bounded and unbounded budget dimension", (t) => {
   const bounded = fixture(t); assert.equal(open(bounded, "default", ["--writes", "0", "--wall-clock-minutes", "0", "--token-budget", "0"]).status, 0);
   const boundedReport = run(["report", "--repo", bounded.repo], { env: bounded.env });
-  assert.match(boundedReport.stdout, /- rounds 0\/8; writes 0\/0; wall clock \d+s\/0m; output tokens estimate 0\/0 \(best effort\)/);
+  assert.match(boundedReport.stdout, /- rounds 0\/8; authorization budget 0\/0 \(unknown\); wall clock \d+s\/0m; output tokens estimate 0\/0 \(best effort\)/);
 
   const unbounded = fixture(t); assert.equal(open(unbounded).status, 0);
   const before = loadTask(unbounded.repo);
   const unboundedReport = run(["report", "--repo", unbounded.repo], { env: unbounded.env });
-  assert.match(unboundedReport.stdout, /- rounds 0\/8; writes 0\/unbounded; wall clock \d+s\/unbounded; output tokens estimate 0\/unbounded \(best effort\)/);
+  assert.match(unboundedReport.stdout, /- rounds 0\/8; authorization budget 0\/unbounded \(not_applicable\); wall clock \d+s\/unbounded; output tokens estimate 0\/unbounded \(best effort\)/);
   const json = JSON.parse(run(["report", "--repo", unbounded.repo, "--json"], { env: unbounded.env }).stdout);
   delete json.generated_at;
+  delete json.write_evidence;
+  delete json.budget.write_compliance;
   assert.deepEqual(json, {
-    runtime_contract: 5,
+    runtime_contract: 6,
     criterion_adapter_protocol_version: 2,
     task_snapshot_schema_version: 3,
     event_record_schema_version: 2,
-    outcome_projection_schema_version: 3,
+    outcome_projection_schema_version: 4,
     generated_by: "workloop report — machine transcription of task state, not testimony",
     task_id: before.task_id,
     lifecycle: before.lifecycle,
@@ -2040,11 +2063,13 @@ test("a path-scoped destructive grant covers literal rm inside its roots and fai
     assert.match(hook(scoped, "rm -rf .scratch/escape").stdout, /outside the granted destructive scope/);
   }
 
-  const touched = loadTask(scoped.repo).evidence.touched_files;
-  assert.ok(touched.includes("<command:destructive_scoped>"), JSON.stringify(touched));
-  assert.ok(touched.some((item) => item.startsWith("<destructive-scoped:")), JSON.stringify(touched));
-  assert.ok(!touched.includes("<command:destructive>"), JSON.stringify(touched));
-  assert.ok(!touched.includes("<command>"), JSON.stringify(touched));
+  const scopedState = loadTask(scoped.repo);
+  const authorityTargets = Object.values(scopedState.operations).flatMap((operation) => operation.authorization?.declared_targets ?? []);
+  assert.ok(authorityTargets.includes("<command:destructive_scoped>"), JSON.stringify(authorityTargets));
+  assert.ok(authorityTargets.some((item) => item.startsWith("<destructive-scoped:")), JSON.stringify(authorityTargets));
+  assert.ok(!authorityTargets.includes("<command:destructive>"), JSON.stringify(authorityTargets));
+  assert.ok(!authorityTargets.includes("<command>"), JSON.stringify(authorityTargets));
+  assert.deepEqual(scopedState.evidence.touched_files, [], "authorization markers are not artifact mutations");
   const floor = JSON.parse(run(["status", "--repo", scoped.repo], { env: scoped.env }).stdout).machine_risk_floor;
   assert.equal(floor.risk, "routine", JSON.stringify(floor));
   assert.deepEqual(JSON.parse(run(["report", "--repo", scoped.repo, "--json"], { env: scoped.env }).stdout).envelope_deviations, []);
@@ -2124,8 +2149,9 @@ test("command shapes observe executable shell payloads without pricing quoted se
   assert.equal(invoke(heredoc, "default").stdout, "");
   const state = loadTask(fx.repo);
   assert.equal(machineRiskFloor(state).risk, "critical");
-  assert.ok(state.evidence.touched_files.includes("<command:git_push>"));
-  assert.ok(state.evidence.touched_files.includes("<command:publish>"));
+  const authorityTargets = Object.values(state.operations).flatMap((operation) => operation.authorization?.declared_targets ?? []);
+  assert.ok(authorityTargets.includes("<command:git_push>"));
+  assert.ok(authorityTargets.includes("<command:publish>"));
 });
 
 test("legacy tri-state exits diagnose protocol 2 and suspend instead of holding forever", (t) => {
@@ -2171,16 +2197,21 @@ test("Stop releases the task lock while criterion runs and discards a stale obse
   assert.equal(during.status, 0, during.stderr);
   assert.ok(statusDuration < 500, `status waited ${statusDuration}ms for a running criterion`);
   const writeStarted = Date.now();
-  const write = await runAsync(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") } }) });
+  const write = await runAsync(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, tool_use_id: "concurrent-operation", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") } }) });
   const writeDuration = Date.now() - writeStarted;
+  fs.writeFileSync(path.join(fx.repo, "work.txt"), "concurrent change\n");
+  const post = await runAsync(["hook", "--profile", "claude"], { cwd: fx.repo, env: fx.env, input: JSON.stringify({ hook_event_name: "PostToolUse", cwd: fx.repo, tool_use_id: "concurrent-operation", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") }, tool_response: { success: true } }) });
   const stopped = await stop;
   assert.equal(write.status, 0, write.stderr);
+  assert.equal(post.status, 0, post.stderr);
   assert.ok(writeDuration < 500, `PreToolUse waited ${writeDuration}ms for a running criterion`);
   assert.match(stopped.stdout, /criterion_observation_stale/);
   const state = loadTask(fx.repo);
-  assert.equal(state.artifact_revision, 1);
+  assert.ok(state.artifact_revision >= 1);
+  assert.ok(state.evidence.touched_files.includes("work.txt"));
   assert.equal(state.spent.rounds, 0);
-  assert.equal(state.criterion.last_observation, null);
+  assert.equal(state.criterion.last_observation.verdict, "indeterminate");
+  assert.equal(state.criterion.last_observation.execution.execution_error, "criterion_side_effect");
 });
 
 test("Stop discards a stale observation after a direct ignored-file write bypasses hooks", async (t) => {
