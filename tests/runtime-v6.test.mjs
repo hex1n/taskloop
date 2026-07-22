@@ -8,6 +8,7 @@ import test from "node:test";
 
 import { buildRecord, readEventStore } from "../lib/event-store.mjs";
 import { artifactCheckpointDelta, artifactCheckpointFromSnapshot, repoSnapshot } from "../lib/criterion.mjs";
+import { syncOutcomeRecords } from "../lib/outcome-projector.mjs";
 import { artifactAssuranceHolds, assertV3TaskProjection, closureProjection, decide, evolve, evolveAll } from "../lib/task-engine.mjs";
 import {
   EVENT_PAYLOAD_FIELDS_BY_VERSION,
@@ -302,6 +303,75 @@ test("operation completion and reconciliation are exactly-once as one decision",
   state = evolveAll(state, replayed.events);
   assert.equal(state.evidence.tool_completions_observed, 1);
   assert.equal(state.artifact_revision, 1);
+});
+
+test("outcome schema 4 preserves terminal count basis and coverage", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-v6-outcome-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const home = path.join(root, "home"); fs.mkdirSync(home);
+  const repoIdentity = `sha256:${"9".repeat(64)}`;
+  const records = []; let previousRecordDigest = null; let repoSequence = 0; let taskEventSequence = 0;
+  const append = (events) => {
+    const record = buildRecord({
+      transactionId: randomUUID(), repoSequence: ++repoSequence,
+      occurredAtEpochMs: Date.parse(AT) + repoSequence,
+      actor: { kind: "cli", session_id: "sanitized" }, previousRecordDigest,
+      events: events.map((event) => ({ ...event, task_event_sequence: ++taskEventSequence })),
+    });
+    previousRecordDigest = record.record_digest; records.push(record);
+  };
+
+  const opened = openCommand();
+  const genesis = decide(null, opened); append(genesis.events);
+  let state = evolveAll(null, genesis.events);
+  const authorization = decide(state, {
+    type: "authorize-write", taskId: state.task_id, at: "2026-07-22T00:00:01.000Z", decision: "allow",
+    files: ["work.txt"], operationId: "operation-1", toolFamily: "patch", hostProfile: "codex-safe",
+    targetCoverage: "exact", receiptExpectation: "post",
+  });
+  append(authorization.events); state = evolveAll(state, authorization.events);
+  const completion = decide(state, {
+    type: "complete-operation", taskId: state.task_id, at: "2026-07-22T00:00:02.000Z",
+    operationId: "operation-1", toolFamily: "patch", outcome: "success", reportedTargets: ["work.txt"],
+    receiptQuality: "tool_specific", hostProfile: "codex-safe",
+    checkpointId: NEXT_CHECKPOINT, fromCheckpoint: EMPTY_CHECKPOINT, toCheckpoint: NEXT_CHECKPOINT,
+    changedEntries: [{ path: "work.txt", before: null, after: FILE_DIGEST }], changedPaths: ["work.txt"],
+    currentScopeViolations: [], coverage: "full", reason: "post-tool",
+    coverageChange: {
+      artifactState: "full", mutationHistory: "unknown", prewriteEnforcement: "unknown",
+      episodeId: state.episodes.at(-1).episode_id, operationId: "operation-1", capabilityId: "hostcap:v1:codex",
+      hostProfile: "codex-safe", surface: "direct", exhaustiveSurface: false,
+      effectiveFromCheckpoint: EMPTY_CHECKPOINT, intervalFromCheckpoint: EMPTY_CHECKPOINT,
+      intervalToCheckpoint: NEXT_CHECKPOINT, reason: "non-exhaustive receipt",
+    },
+  });
+  append(completion.events); state = evolveAll(state, completion.events);
+  const terminal = decide(state, { type: "abandon", taskId: state.task_id, at: "2026-07-22T00:00:03.000Z", reason: "fixture complete" });
+  append(terminal.events);
+
+  syncOutcomeRecords({ repoIdentity, records, home });
+  const rows = fs.readFileSync(path.join(home, ".workloop", "outcomes.jsonl"), "utf8").trim().split("\n").map(JSON.parse);
+  const row = rows.at(-1);
+  assert.equal(row.projection_schema_version, 4);
+  assert.deepEqual(row.payload.write_evidence, {
+    write_count_basis: "authorized", write_operations_authorized: 1,
+    tool_completions_observed: 1, artifact_changes: 1, touched_files: ["work.txt"],
+    artifact_state_coverage: "full", mutation_history_coverage: "unknown", prewrite_enforcement: "unknown",
+  });
+
+  const repo = path.join(root, "repo");
+  fs.mkdirSync(path.join(repo, ".git"), { recursive: true });
+  fs.mkdirSync(path.join(repo, ".workloop"));
+  fs.writeFileSync(path.join(repo, ".workloop", "events.jsonl"), `${records.map((record) => JSON.stringify(record)).join("\n")}\n`);
+  const ledgerRun = spawnSync(process.execPath, [CLI, "ledger", "--repo", repo, "--json"], {
+    cwd: repo, env: { ...process.env, HOME: home, USERPROFILE: home }, encoding: "utf8",
+  });
+  assert.equal(ledgerRun.status, 0, ledgerRun.stderr);
+  const terminalWriteSet = JSON.parse(ledgerRun.stdout).queries.terminal_write_sets[0];
+  assert.deepEqual({
+    files: terminalWriteSet.files, basis: terminalWriteSet.write_count_basis,
+    artifact: terminalWriteSet.artifact_state_coverage, history: terminalWriteSet.mutation_history_coverage,
+  }, { files: ["work.txt"], basis: "authorized", artifact: "full", history: "unknown" });
 });
 
 test("PreToolUse and PostToolUse persist one correlated operation and landed artifact", (t) => {
