@@ -113,7 +113,7 @@ for (const [label, executable, argsFor, spawnOptions] of hookShells) {
     });
     const args = argsFor(command);
     const response = parsed(spawnSync(executable, args, { env: fixture.env, input: payload, encoding: "utf8", timeout: 30_000, ...spawnOptions }), label);
-    assert.equal(response.hookSpecificOutput.permissionDecision, "allow", label);
+    assert.equal("permissionDecision" in response.hookSpecificOutput, false, `${label} must leave execution approval to the host`);
     assert.match(response.hookSpecificOutput.updatedInput.command, /^\$env:WORKLOOP_SESSION_ID='windows-session'; /, label);
   });
 }
