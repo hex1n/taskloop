@@ -360,8 +360,15 @@ test("PreToolUse and PostToolUse persist one correlated operation and landed art
     artifact_coverage: status.write_evidence.artifact_state_coverage,
     history_coverage: status.write_evidence.mutation_history_coverage,
   }, { writes: 1, completions: 1, artifact_revisions: 1, artifact_coverage: "full", history_coverage: "unknown" });
+  assert.equal(status.budget.write_compliance, "not_applicable");
+  assert.equal(status.write_evidence.authority.write_operations_authorized, 1);
+  assert.equal(status.write_evidence.evidence.tool_completions_observed, 1);
+  assert.equal(status.write_evidence.artifact_checkpoint.checkpoint_id, projection.artifact_checkpoint.checkpoint_id);
+  assert.equal(status.write_evidence.capability_leases.length, 0);
+  assert.equal(status.write_evidence.coverage_intervals.length, 1);
   const report = JSON.parse(run(["report", "--repo", repo, "--json"]).stdout);
   assert.equal(report.write_evidence.write_count_basis, "authorized");
+  assert.equal(report.budget.write_compliance, "not_applicable");
   const ledger = JSON.parse(run(["ledger", "--repo", repo, "--json"]).stdout);
   assert.deepEqual({
     writes: ledger.metrics.writes,
