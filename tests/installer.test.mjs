@@ -42,12 +42,92 @@ test("installer warns about legacy Codex Stop hooks without editing user configu
   const safeConfig = JSON.parse(original.toString("utf8"));
   safeConfig.hooks.Stop[0].hooks[0].command += " hook --profile codex-safe";
   safeConfig.hooks.Stop[0].hooks[0].timeout = 45;
+  safeConfig.hooks.Stop[0].matcher = "*";
+  safeConfig.hooks.PreToolUse = [{
+    matcher: "Write|Edit|MultiEdit|Bash|PowerShell|mcp__.*",
+    hooks: [{ type: "command", command: 'node "/installed/workloop.mjs" hook --profile codex-safe', timeout: 20 }],
+  }];
   const safe = Buffer.from(JSON.stringify(safeConfig, null, 2) + "\n");
   fs.writeFileSync(config, safe);
   const checked = run(path.join(ROOT, "install.mjs"), [], { env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT } });
   assert.equal(checked.status, 0, checked.stderr || checked.stdout);
-  assert.doesNotMatch(checked.stdout, /legacy Codex workloop Stop hook found/);
+  assert.doesNotMatch(checked.stdout, /(?:legacy|experimental).*Codex.*hook|Codex workloop (?:PreToolUse|Stop) hook (?:is missing|uses a stale|is configured)/);
   assert.deepEqual(fs.readFileSync(config), safe);
+});
+
+test("installer diagnoses a missing Codex PreToolUse hook without editing configuration", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-missing-pretooluse-")); const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const config = path.join(home, ".codex", "hooks.json");
+  fs.mkdirSync(path.dirname(config), { recursive: true });
+  const original = Buffer.from(JSON.stringify({ hooks: {
+    Stop: [{ matcher: "*", hooks: [{ type: "command", command: 'node "/installed/workloop.mjs" hook --profile codex-safe --mode nudge', timeout: 45 }] }],
+  } }, null, 2) + "\n");
+  fs.writeFileSync(config, original);
+
+  const installed = run(path.join(ROOT, "install.mjs"), [], { env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT } });
+
+  assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+  assert.match(installed.stdout, /Codex workloop PreToolUse hook is missing.*hooks --profile codex-safe/);
+  assert.deepEqual(fs.readFileSync(config), original);
+});
+
+test("installer diagnoses Codex PreToolUse profile, timeout, and matcher drift", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-pretooluse-drift-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cases = [
+    {
+      name: "profile",
+      handler: { type: "command", command: 'node "/installed/workloop.mjs" hook --profile codex-cli-legacy --mode nudge', timeout: 20 },
+      matcher: "Write|Edit|MultiEdit|Bash|PowerShell|mcp__.*",
+      expected: /experimental Codex CLI legacy PreToolUse hook/,
+    },
+    {
+      name: "timeout",
+      handler: { type: "command", command: 'node "/installed/workloop.mjs" hook --profile codex-safe --mode nudge', timeout: 45 },
+      matcher: "Write|Edit|MultiEdit|Bash|PowerShell|mcp__.*",
+      expected: /Codex workloop PreToolUse hook uses a stale or missing timeout/,
+    },
+    {
+      name: "matcher",
+      handler: { type: "command", command: 'node "/installed/workloop.mjs" hook --profile codex-safe --mode nudge', timeout: 20 },
+      matcher: "Write|Bash",
+      expected: /Codex workloop PreToolUse hook uses a stale or missing matcher/,
+    },
+  ];
+  for (const fixture of cases) {
+    const home = path.join(root, fixture.name);
+    const config = path.join(home, ".codex", "hooks.json");
+    fs.mkdirSync(path.dirname(config), { recursive: true });
+    const original = Buffer.from(JSON.stringify({ hooks: {
+      PreToolUse: [{ matcher: fixture.matcher, hooks: [fixture.handler] }],
+      Stop: [{ matcher: "*", hooks: [{ type: "command", command: 'node "/installed/workloop.mjs" hook --profile codex-safe --mode nudge', timeout: 45 }] }],
+    } }, null, 2) + "\n");
+    fs.writeFileSync(config, original);
+
+    const installed = run(path.join(ROOT, "install.mjs"), [], { env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT } });
+    assert.equal(installed.status, 0, `${fixture.name}: ${installed.stderr || installed.stdout}`);
+    assert.match(installed.stdout, fixture.expected, fixture.name);
+    assert.deepEqual(fs.readFileSync(config), original, fixture.name);
+  }
+});
+
+test("installer diagnoses Claude PreToolUse drift without editing configuration", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-claude-pretooluse-")); const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const config = path.join(home, ".claude", "settings.json");
+  fs.mkdirSync(path.dirname(config), { recursive: true });
+  const original = Buffer.from(JSON.stringify({ hooks: {
+    PreToolUse: [{ matcher: "Write|Edit", hooks: [{ type: "command", command: 'node "/installed/workloop.mjs" hook --profile claude --mode nudge', timeout: 45 }] }],
+    Stop: [{ matcher: "*", hooks: [{ type: "command", command: 'node "/installed/workloop.mjs" hook --profile claude --mode nudge', timeout: 45 }] }],
+  } }, null, 2) + "\n");
+  fs.writeFileSync(config, original);
+
+  const installed = run(path.join(ROOT, "install.mjs"), [], { env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT } });
+
+  assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+  assert.match(installed.stdout, /Claude workloop PreToolUse hook uses a stale or missing timeout/);
+  assert.deepEqual(fs.readFileSync(config), original);
 });
 
 test("installer diagnoses a stale codex-safe Stop timeout without editing configuration", (t) => {
@@ -80,7 +160,7 @@ test("installer diagnoses a stale Claude hard-Stop timeout without editing confi
   assert.deepEqual(fs.readFileSync(config), original);
 });
 
-test("installer does not confuse a workloop PreToolUse hook with another tool's Stop hook", (t) => {
+test("installer reports a missing Workloop Stop without confusing another tool's Stop hook", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-hook-ownership-")); const home = path.join(root, "home");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const config = path.join(home, ".codex", "hooks.json");
@@ -94,11 +174,12 @@ test("installer does not confuse a workloop PreToolUse hook with another tool's 
   const installed = run(path.join(ROOT, "install.mjs"), [], { env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT } });
 
   assert.equal(installed.status, 0, installed.stderr || installed.stdout);
-  assert.doesNotMatch(installed.stdout, /Codex workloop Stop hook/);
+  assert.match(installed.stdout, /Codex workloop Stop hook is missing/);
+  assert.doesNotMatch(installed.stdout, /legacy Codex workloop Stop hook/);
   assert.deepEqual(fs.readFileSync(config), original);
 });
 
-test("installer does not confuse a TOML workloop PreToolUse hook with Stop", (t) => {
+test("installer reports a missing TOML Workloop Stop without confusing another tool's Stop", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-hook-toml-ownership-")); const home = path.join(root, "home");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const config = path.join(home, ".codex", "config.toml");
@@ -109,7 +190,8 @@ test("installer does not confuse a TOML workloop PreToolUse hook with Stop", (t)
   const installed = run(path.join(ROOT, "install.mjs"), [], { env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT } });
 
   assert.equal(installed.status, 0, installed.stderr || installed.stdout);
-  assert.doesNotMatch(installed.stdout, /Codex workloop Stop hook|cannot inspect Codex Hook configuration.*config\.toml/);
+  assert.match(installed.stdout, /Codex workloop Stop hook is missing/);
+  assert.doesNotMatch(installed.stdout, /legacy Codex workloop Stop hook|cannot inspect Codex Hook configuration.*config\.toml/);
   assert.deepEqual(fs.readFileSync(config), original);
 });
 

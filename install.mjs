@@ -23,12 +23,21 @@ const RUNTIME_CONTRACT = (() => {
   if (value !== 5) throw new Error(`workloop installer requires runtime contract 5 source; refusing contract ${Number.isFinite(value) ? value : "unknown"}`);
   return value;
 })();
-const STOP_RECIPE_TIMEOUT_SECONDS = (() => {
-  const source = fs.readFileSync(path.join(SOURCE, "lib", "host-hooks.mjs"), "utf8");
-  const value = Number(source.match(/const STOP_RECIPE_TIMEOUT_SECONDS = (\d+);/)?.[1]);
-  if (!Number.isSafeInteger(value) || value <= 0) throw new Error("workloop installer cannot read the Stop recipe timeout contract");
+const HOST_HOOKS_SOURCE = fs.readFileSync(path.join(SOURCE, "lib", "host-hooks.mjs"), "utf8");
+function hookSourceInteger(name) {
+  const value = Number(HOST_HOOKS_SOURCE.match(new RegExp(`const ${name} = (\\d+);`))?.[1]);
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`workloop installer cannot read the ${name} contract`);
   return value;
-})();
+}
+function hookSourceString(name) {
+  const value = HOST_HOOKS_SOURCE.match(new RegExp(`const ${name} = "([^"]*)";`))?.[1];
+  if (typeof value !== "string" || !value) throw new Error(`workloop installer cannot read the ${name} contract`);
+  return value;
+}
+const PRE_TOOL_USE_MATCHER = hookSourceString("PRE_TOOL_USE_MATCHER");
+const STOP_MATCHER = hookSourceString("STOP_MATCHER");
+const PRE_TOOL_USE_RECIPE_TIMEOUT_SECONDS = hookSourceInteger("PRE_TOOL_USE_RECIPE_TIMEOUT_SECONDS");
+const STOP_RECIPE_TIMEOUT_SECONDS = hookSourceInteger("STOP_RECIPE_TIMEOUT_SECONDS");
 // Module-level plan log. Every exported entry point resets it so a library
 // caller never inherits a previous invocation's rows; main() aggregates the
 // rows appended by everything it runs after the one entry-point reset.
@@ -523,24 +532,31 @@ function tomlContainerDelta(value) {
   return delta;
 }
 
-function codexStopCommands(config, text) {
-  if (config.endsWith("hooks.json")) {
-    const parsed = JSON.parse(text);
-    const groups = parsed?.hooks?.Stop;
-    if (!Array.isArray(groups)) return [];
-    return groups.flatMap((group) => Array.isArray(group?.hooks) ? group.hooks : [])
-      .filter((handler) => typeof handler?.command === "string")
-      .map((handler) => ({ command: handler.command, timeout: handler.timeout }));
-  }
+const HOOK_EVENT_CONTRACTS = Object.freeze({
+  PreToolUse: Object.freeze({ matcher: PRE_TOOL_USE_MATCHER, timeout: PRE_TOOL_USE_RECIPE_TIMEOUT_SECONDS }),
+  Stop: Object.freeze({ matcher: STOP_MATCHER, timeout: STOP_RECIPE_TIMEOUT_SECONDS }),
+});
+
+function jsonHookCommands(text, event) {
+  const parsed = JSON.parse(text);
+  const groups = parsed?.hooks?.[event];
+  if (!Array.isArray(groups)) return [];
+  return groups.flatMap((group) => (Array.isArray(group?.hooks) ? group.hooks : [])
+    .filter((handler) => typeof handler?.command === "string")
+    .map((handler) => ({ command: handler.command, matcher: typeof group?.matcher === "string" ? group.matcher : null, timeout: handler.timeout })));
+}
+
+function codexHookCommands(config, text, event) {
+  if (config.endsWith(".json")) return jsonHookCommands(text, event);
   const sections = [];
   const unparsedHookLines = [];
   let current = null;
   let unparsedHookRegion = false;
   let unparsedHookDepth = null;
   for (const line of text.split(/\r?\n/)) {
-    const header = line.match(/^\s*\[\[hooks\.([^.\]]+)(?:\.hooks)?\]\]\s*$/);
+    const header = line.match(/^\s*\[\[hooks\.([^.\]]+)(\.hooks)?\]\]\s*$/);
     if (header) {
-      current = { event: header[1], lines: [] };
+      current = { event: header[1], handler: Boolean(header[2]), lines: [] };
       sections.push(current);
       unparsedHookRegion = false;
       unparsedHookDepth = null;
@@ -568,18 +584,60 @@ function codexStopCommands(config, text) {
       }
     }
   }
-  const commands = sections.filter((section) => section.event === "Stop").map((section) => {
+  const activeMatchers = new Map();
+  const commands = [];
+  for (const section of sections) {
     const body = section.lines.join("\n");
+    if (!section.handler) {
+      const matcher = body.match(/^\s*matcher\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/m);
+      activeMatchers.set(section.event, matcher?.[1] ?? matcher?.[2] ?? null);
+      continue;
+    }
+    if (section.event !== event) continue;
     const timeout = Number(body.match(/^\s*timeout\s*=\s*(\d+)\s*(?:#.*)?$/m)?.[1]);
-    return { command: body, timeout: Number.isSafeInteger(timeout) ? timeout : null };
-  });
+    commands.push({ command: body, matcher: activeMatchers.get(section.event) ?? null, timeout: Number.isSafeInteger(timeout) ? timeout : null });
+  }
   if (unparsedHookLines.some((line) => /workloop(?:\.mjs)?/i.test(line))) {
     throw new Error("workloop hook uses unsupported TOML syntax");
   }
   return commands;
 }
 
+function inspectHookEvent({ host, event, handlers, configuredIn, expectedProfile }) {
+  const contract = HOOK_EVENT_CONTRACTS[event];
+  const locations = [...new Set((handlers.length ? handlers.map((handler) => handler.config) : configuredIn))].join(", ");
+  const recipe = `generate workloop hooks --profile ${expectedProfile} --mode nudge and merge it manually; configuration preserved`;
+  if (!handlers.length) {
+    plan("warning", `${host} workloop ${event} hook is missing in ${locations}; ${recipe}`);
+    return;
+  }
+  if (handlers.length !== 1) {
+    plan("warning", `${host} workloop ${event} hook is configured more than once in ${locations}; keep exactly one generated handler; configuration preserved`);
+    return;
+  }
+  const profilePattern = new RegExp(`\\bhook\\s+--profile\\s+${expectedProfile}\\b`);
+  if (!handlers.every((handler) => profilePattern.test(handler.command))) {
+    if (host === "Codex" && handlers.some((handler) => /\bhook\s+--profile\s+codex-cli-legacy\b/.test(handler.command))) {
+      plan("warning", `experimental Codex CLI legacy ${event} hook found in ${locations}; never use it in Codex App. Generate a safe recipe with workloop hooks --profile codex-safe --mode nudge; configuration preserved`);
+      return;
+    }
+    plan("warning", `legacy ${host} workloop ${event} hook found in ${locations}; ${recipe}`);
+    return;
+  }
+  if (handlers.some((handler) => handler.timeout !== contract.timeout)) {
+    plan("warning", `${host} workloop ${event} hook uses a stale or missing timeout in ${locations}; ${recipe}`);
+    return;
+  }
+  if (handlers.some((handler) => handler.matcher !== contract.matcher)) {
+    plan("warning", `${host} workloop ${event} hook uses a stale or missing matcher in ${locations}; ${recipe}`);
+    return;
+  }
+  const profileDescription = host === "Claude" && event === "Stop" ? "the hard profile" : expectedProfile;
+  plan("ok", `${host} workloop ${event} hook uses ${profileDescription}: ${locations}`);
+}
+
 function inspectCodexHookProfiles(home) {
+  const workloopHandlers = [];
   for (const config of [path.join(home, ".codex", "hooks.json"), path.join(home, ".codex", "config.toml")]) {
     let text;
     try {
@@ -590,26 +648,19 @@ function inspectCodexHookProfiles(home) {
     }
     let commands;
     try {
-      commands = codexStopCommands(config, text).filter((handler) => /workloop(?:\.mjs)?/i.test(handler.command));
+      commands = Object.keys(HOOK_EVENT_CONTRACTS).flatMap((event) => codexHookCommands(config, text, event)
+        .filter((handler) => /workloop(?:\.mjs)?/i.test(handler.command))
+        .map((handler) => ({ ...handler, config, event })));
     } catch (error) {
       plan("warning", `cannot inspect Codex Hook configuration ${config}: ${error?.message ?? error}; preserved ${config}`);
       continue;
     }
-    if (!commands.length) continue;
-    const joined = commands.map((handler) => handler.command).join("\n");
-    if (/\bhook\s+--profile\s+codex-safe\b/.test(joined) && !commands.some((handler) => !/\bhook\s+--profile\s+codex-safe\b/.test(handler.command))) {
-      if (commands.some((handler) => handler.timeout !== STOP_RECIPE_TIMEOUT_SECONDS)) {
-        plan("warning", `Codex workloop Stop hook uses a stale or missing timeout in ${config}; generate workloop hooks --profile codex-safe --mode nudge and merge it manually; configuration preserved`);
-        continue;
-      }
-      plan("ok", `Codex workloop Stop hook uses codex-safe: ${config}`);
-      continue;
-    }
-    if (/\bhook\s+--profile\s+codex-cli-legacy\b/.test(joined)) {
-      plan("warning", `experimental Codex CLI legacy Stop hook found in ${config}; never use it in Codex App. Generate a safe recipe with workloop hooks --profile codex-safe --mode nudge; configuration preserved`);
-      continue;
-    }
-    plan("warning", `legacy Codex workloop Stop hook found in ${config}; generate a safe recipe with workloop hooks --profile codex-safe --mode nudge and merge it manually; configuration preserved`);
+    workloopHandlers.push(...commands);
+  }
+  if (!workloopHandlers.length) return;
+  const configuredIn = workloopHandlers.map((handler) => handler.config);
+  for (const event of Object.keys(HOOK_EVENT_CONTRACTS)) {
+    inspectHookEvent({ host: "Codex", event, handlers: workloopHandlers.filter((handler) => handler.event === event), configuredIn, expectedProfile: "codex-safe" });
   }
 }
 
@@ -621,25 +672,20 @@ function inspectClaudeHookProfile(home) {
     if (error?.code !== "ENOENT") plan("warning", `cannot inspect Claude Hook configuration ${config}: ${error?.message ?? error}; preserved ${config}`);
     return;
   }
-  let parsed;
-  try { parsed = JSON.parse(text); }
+  let handlers;
+  try {
+    handlers = Object.keys(HOOK_EVENT_CONTRACTS).flatMap((event) => jsonHookCommands(text, event)
+      .filter((handler) => /workloop(?:\.mjs)?/i.test(handler.command))
+      .map((handler) => ({ ...handler, config, event })));
+  }
   catch (error) {
     plan("warning", `cannot inspect Claude Hook configuration ${config}: ${error?.message ?? error}; preserved ${config}`);
     return;
   }
-  const handlers = (Array.isArray(parsed?.hooks?.Stop) ? parsed.hooks.Stop : [])
-    .flatMap((group) => Array.isArray(group?.hooks) ? group.hooks : [])
-    .filter((handler) => typeof handler?.command === "string" && /workloop(?:\.mjs)?/i.test(handler.command));
   if (!handlers.length) return;
-  if (handlers.every((handler) => /\bhook\s+--profile\s+claude\b/.test(handler.command))) {
-    if (handlers.some((handler) => handler.timeout !== STOP_RECIPE_TIMEOUT_SECONDS)) {
-      plan("warning", `Claude workloop Stop hook uses a stale or missing timeout in ${config}; generate workloop hooks --profile claude --mode nudge and merge it manually; configuration preserved`);
-      return;
-    }
-    plan("ok", `Claude workloop Stop hook uses the hard profile: ${config}`);
-    return;
+  for (const event of Object.keys(HOOK_EVENT_CONTRACTS)) {
+    inspectHookEvent({ host: "Claude", event, handlers: handlers.filter((handler) => handler.event === event), configuredIn: [config], expectedProfile: "claude" });
   }
-  plan("warning", `legacy Claude workloop Stop hook found in ${config}; generate workloop hooks --profile claude --mode nudge and merge it manually; configuration preserved`);
 }
 
 function pruneRuntimes(runtimeRoot, activeHash, dry) {

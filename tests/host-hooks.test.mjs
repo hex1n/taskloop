@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  PRE_TOOL_USE_RECIPE_TIMEOUT_SECONDS,
   STOP_INLINE_CRITERION_SECONDS,
   STOP_RECIPE_TIMEOUT_SECONDS,
   STOP_RUNTIME_DEADLINE_SECONDS,
@@ -125,10 +126,18 @@ test("explicit profiles decode payloads and generate self-identifying recipes", 
 
   assert.deepEqual(buildHookRecipe({ profile: "codex-safe", command: 'node "/path/workloop.mjs"' }), {
     hooks: {
-        PreToolUse: [{ matcher: "Write|Edit|MultiEdit|Bash|PowerShell|mcp__.*", hooks: [{ type: "command", command: 'node "/path/workloop.mjs" hook --profile codex-safe --mode nudge', timeout: 20 }] }],
-        Stop: [{ matcher: "*", hooks: [{ type: "command", command: 'node "/path/workloop.mjs" hook --profile codex-safe --mode nudge', timeout: STOP_RECIPE_TIMEOUT_SECONDS }] }],
+        PreToolUse: [{ matcher: "Write|Edit|MultiEdit|Bash|PowerShell|mcp__.*", hooks: [{ type: "command", command: 'node "/path/workloop.mjs" hook --profile codex-safe --mode nudge', statusMessage: "Checking workloop envelope", timeout: PRE_TOOL_USE_RECIPE_TIMEOUT_SECONDS }] }],
+        Stop: [{ matcher: "*", hooks: [{ type: "command", command: 'node "/path/workloop.mjs" hook --profile codex-safe --mode nudge', statusMessage: "Checking workloop completion state", timeout: STOP_RECIPE_TIMEOUT_SECONDS }] }],
     },
   });
+
+  const claudeRecipe = buildHookRecipe({ profile: "claude", command: "workloop" });
+  assert.equal("statusMessage" in claudeRecipe.hooks.PreToolUse[0].hooks[0], false);
+  assert.equal("statusMessage" in claudeRecipe.hooks.Stop[0].hooks[0], false);
+
+  const legacyCodexRecipe = buildHookRecipe({ profile: "codex-cli-legacy", command: "workloop" });
+  assert.equal(legacyCodexRecipe.hooks.PreToolUse[0].hooks[0].statusMessage, "Checking workloop envelope");
+  assert.equal(legacyCodexRecipe.hooks.Stop[0].hooks[0].statusMessage, "Checking workloop completion state");
 
   assert.throws(() => decodeHook({ profile: "codex-app", payload: {} }), /unsupported hook profile: codex-app/);
   assert.throws(() => buildHookRecipe({ profile: "unknown", command: "workloop" }), /explicit hook profile required/);
