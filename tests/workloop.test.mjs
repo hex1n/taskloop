@@ -1063,6 +1063,25 @@ test("ledger exposes control-plane shell text that could not be safely rewritten
   assert.match(ledger.queries.control_plane_friction_candidates[0].reason, /not safely rewritable/);
 });
 
+test("large ledger JSON flushes completely through a pipe", (t) => {
+  const fx = fixture(t);
+  for (let index = 0; index < 20; index += 1) {
+    assert.equal(appendEvidence(fx.repo, {
+      at: AT,
+      kind: "control_plane_friction_candidate",
+      sequence_session: "owner",
+      acting_session: "owner",
+      reason: `${index}: ${"x".repeat(4_096)}`,
+    }), true);
+  }
+
+  const result = run(["ledger", "--json", "--repo", fx.repo], { env: fx.env });
+  assert.equal(result.status, 0, result.stderr);
+  const ledger = JSON.parse(result.stdout);
+  assert.ok(Buffer.byteLength(result.stdout, "utf8") > 64 * 1_024, "fixture must cross the pipe flush boundary");
+  assert.equal(ledger.queries.control_plane_friction_candidates.length, 20);
+});
+
 test("hook recipes make no installation claim and coverage requires a later live census", (t) => {
   const fx = fixture(t);
   const recipe = run(["hooks", "--repo", fx.repo, "--profile", "codex-safe", "--mode", "nudge"], { env: fx.env });
