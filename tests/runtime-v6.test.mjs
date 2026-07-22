@@ -9,6 +9,7 @@ import test from "node:test";
 import { buildRecord, readEventStore } from "../lib/event-store.mjs";
 import { artifactCheckpointDelta, artifactCheckpointFromSnapshot, repoSnapshot } from "../lib/criterion.mjs";
 import { syncOutcomeRecords } from "../lib/outcome-projector.mjs";
+import { buildTaskSnapshot, validateTaskSnapshot } from "../lib/task-store.mjs";
 import { artifactAssuranceHolds, assertV3TaskProjection, closureProjection, decide, evolve, evolveAll } from "../lib/task-engine.mjs";
 import {
   EVENT_PAYLOAD_FIELDS_BY_VERSION,
@@ -130,6 +131,27 @@ test("event framing persists a Contract 6 genesis with payload version 2", () =>
   assert.equal(record.record_schema_version, 2);
   assert.equal(record.events[0].payload_version, 2);
   assert.equal(record.events[0].payload.runtime_contract, 6);
+});
+
+test("Contract 6 projections use persisted task runtime contract 5", () => {
+  const command = openCommand();
+  const event = decide(null, command).events[0];
+  const record = buildRecord({
+    transactionId: randomUUID(), repoSequence: 1, occurredAtEpochMs: Date.parse(AT),
+    actor: { kind: "cli", session_id: "sanitized" }, previousRecordDigest: null,
+    events: [{ ...event, task_event_sequence: 1 }],
+  });
+  const projection = evolveAll(null, [event]);
+  const snapshot = buildTaskSnapshot({
+    sourceCursor: {
+      event_store_file: "events.jsonl", repo_sequence: 1, task_event_sequence: 1,
+      record_digest: record.record_digest, event_id: record.events[0].event_id,
+      valid_end_offset: Buffer.byteLength(`${JSON.stringify(record)}\n`),
+    },
+    projection, validateProjection: assertV3TaskProjection,
+  });
+  assert.equal(snapshot.runtime_contract, 5);
+  assert.equal(validateTaskSnapshot(snapshot, { validateProjection: assertV3TaskProjection }), snapshot);
 });
 
 test("Contract 6 projection separates authorization, completion, and artifact mutation", () => {
