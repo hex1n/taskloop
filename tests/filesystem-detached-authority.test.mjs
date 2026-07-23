@@ -208,12 +208,14 @@ test("copied locator is never accepted as an automatic move after its original r
 test("a Git initialization inside a claimed filesystem root is an authority-kind conflict and filesystem exposes no Git operation surface", (t) => {
   const fx = fixture(t, "git-conflict");
   open(fx, { id: "open-conflict", session: "session-conflict", writeRoot: "src" });
+  const stage = run(fx, ["current-stage", "--target", path.join(fx.root, "src", "later.txt"), "--task-id", "not-used", "--command-id", "not-used", "--reason", "filesystem boundary", "--granted-by", "user"], { session: "session-conflict" });
+  assert.equal(stage.status, 2);
+  assert.match(stage.stderr, /unavailable for detached filesystem authorities/i);
   execFileSync("git", ["init", "-q"], { cwd: fx.root });
   const status = run(fx, ["current-status", "--target", path.join(fx.root, "src", "later.txt")], { session: "session-conflict" });
   assert.equal(status.status, 2);
   assert.match(status.stderr, /authority.*conflict|contained by Git/i);
-  const help = run(fx, ["help"]);
-  assert.doesNotMatch(help.stdout, /current-(?:stage|commit)/);
+
 });
 
 test("filesystem Hook records receipts without claiming host execution authority", (t) => {
