@@ -227,6 +227,8 @@ test("target-first routing covers canonical aliases, case, nesting, external and
 });
 
 
+test("replay rejects Git certification without its matching clean commit receipt", (t) => { const fx = fixture(t, "forged-certification"); const opened = openTask(fx, "forged-certification-open"); const ledger = json(run(["current-ledger", "--target", fx.repo])).records; const prior = ledger.at(-1); const forged = { authority_schema_version: 1, sequence: prior.sequence + 1, previous_digest: prior.record_digest, record_id: randomUUID(), command_id: "forged-certification", kind: "task_certified", payload: { task_id: opened.task.task_id, attachment_id: opened.attachment_id, session_id: "session-main", prepared_sequence: prior.sequence, attachment_final_digest: opened.task.attachment_final_digest, criterion_digest: sha256Hex("criterion"), commit_oid: "0123456789012345678901234567890123456789", reason: "forged", granted_by: "self" } }; forged.record_digest = sha256Hex(canonicalJson(forged)); fs.appendFileSync(path.join(fx.commonDir, "workloop", "authority.jsonl"), canonicalJson(forged) + "\n"); const rejected = run(["current-status", "--target", fx.repo]); assert.equal(rejected.status, 2); assert.match(rejected.stderr, /task certification/); });
+
 test("persisted schema and task-engine transitions reject hash-valid invalid authority", (t) => {
   const transitionFx = fixture(t, "invalid-transition");
   const opened = openTask(transitionFx, "transition-open");
