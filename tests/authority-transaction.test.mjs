@@ -29,12 +29,12 @@ function lockFixture(t, options = {}) {
 
 const nested = (locks, outer, inner) => () => locks.withLock(outer, `${outer}-resource`, () => locks.withLock(inner, `${inner}-resource`, () => "ok"));
 
-test("physical lock protocol permits only Git/criterion to authority and rejects reentrancy", (t) => {
+test("physical lock protocol permits explicit parent locks to authority and rejects reentrancy", (t) => {
   const locks = lockFixture(t);
   const otherProviderLocks = lockFixture(t);
-  for (const outer of ["git_operation", "criterion_lease"]) assert.equal(nested(locks, outer, "authority")(), "ok");
+  for (const outer of ["git_operation", "criterion_lease", "maintenance"]) assert.equal(nested(locks, outer, "authority")(), "ok");
   for (const lockClass of ["authority", "git_operation", "criterion_lease", "outcome", "maintenance"]) assert.throws(nested(locks, lockClass, lockClass), /lock order violation|non-reentrant/);
-  for (const [outer, inner] of [["authority", "git_operation"], ["authority", "criterion_lease"], ["authority", "outcome"], ["authority", "maintenance"], ["git_operation", "criterion_lease"], ["git_operation", "outcome"], ["git_operation", "maintenance"], ["criterion_lease", "git_operation"], ["criterion_lease", "outcome"], ["criterion_lease", "maintenance"], ["outcome", "authority"], ["maintenance", "authority"]]) assert.throws(nested(locks, outer, inner), /lock order violation/);
+  for (const [outer, inner] of [["authority", "git_operation"], ["authority", "criterion_lease"], ["authority", "outcome"], ["authority", "maintenance"], ["git_operation", "criterion_lease"], ["git_operation", "outcome"], ["git_operation", "maintenance"], ["criterion_lease", "git_operation"], ["criterion_lease", "outcome"], ["criterion_lease", "maintenance"], ["outcome", "authority"]]) assert.throws(nested(locks, outer, inner), /lock order violation/);
   assert.throws(() => locks.withLock("authority", "provider-a", () => otherProviderLocks.withLock("authority", "provider-b", () => assert.fail("must not hold two authorities"))), /two authorities cannot be held together/);
   assert.throws(() => locks.withLock("authority", "async", async () => {}), /must be synchronous/);
   assert.throws(() => runAuthorityTransaction({ append: () => assert.fail("must not append without a lock") }), (error) => error.code === "INVALID_LOCK_MANAGER");
