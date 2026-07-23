@@ -88,10 +88,11 @@ test("installer source contains no compatibility runtime pins or legacy skill ad
   assert.doesNotMatch(hookSource, /codex-safe|ALL_PROFILES|unknown:\s*Object\.freeze|profile === "unknown"/);
 });
 
-test("unsupported profiles are released in default Hook modes but never accepted as profiles", () => {
+test("unsupported profiles are silently released in default Hook modes but never accepted as profiles", () => {
   const released = spawnSync(process.execPath, [path.join(ROOT, "bin", "workloop.mjs"), "hook", "--profile", "codex-safe", "--mode", "nudge"], { encoding: "utf8", input: JSON.stringify({ hook_event_name: "Stop" }) });
   assert.equal(released.status, 0, released.stderr);
-  assert.match(released.stderr, /unsupported hook profile.*released without recording/);
+  assert.equal(released.stderr, "");
+  assert.equal(released.stdout, "");
   const denied = spawnSync(process.execPath, [path.join(ROOT, "bin", "workloop.mjs"), "hook", "--profile", "codex-safe", "--mode", "deny"], { encoding: "utf8" });
   assert.equal(denied.status, 2);
   assert.match(denied.stderr, /unsupported hook profile; expected claude\|codex/);
