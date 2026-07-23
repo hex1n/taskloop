@@ -49,8 +49,8 @@ test("Stop hooks exit zero with no task and with incompatible task state", (t) =
   fs.mkdirSync(path.join(repo, ".workloop"), { recursive: true }); fs.writeFileSync(path.join(repo, ".workloop", "task.json"), '{"schema_version":1}\n');
   stopped = run(CLI, ["hook", "--profile", "claude", "--mode", "deny"], { cwd: repo, env, input: payload });
   assert.equal(stopped.status, 0);
-  assert.equal(stopped.stderr, "task snapshot exists without a valid schema-v3 event authority; archive it with explicit user authorization\n");
-  assert.equal(stopped.stdout, '{"decision":"block","reason":"workloop: task state unavailable (ORPHAN_V3_SNAPSHOT); refusing to adjudicate Stop"}\n');
+  assert.equal(stopped.stderr, "");
+  assert.equal(stopped.stdout, "");
 });
 
 test("command-shaped authority fails closed when task authority is corrupt", (t) => {

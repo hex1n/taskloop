@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const result = spawnSync(
   process.execPath,
   ["--test", "tests/authority-transaction.test.mjs", "tests/provider-installer.test.mjs", "tests/git-main-authority.test.mjs", "tests/git-task-receipts.test.mjs", "tests/git-linked-worktree-authority.test.mjs", "tests/git-partitioned-multitask-authority.test.mjs", "tests/git-exclusive-worktree-authority.test.mjs", "tests/filesystem-detached-authority.test.mjs", "tests/attachment-recovery-authority.test.mjs"],

@@ -88,12 +88,20 @@ test("installer source contains no compatibility runtime pins or legacy skill ad
   assert.doesNotMatch(hookSource, /codex-safe|ALL_PROFILES|unknown:\s*Object\.freeze|profile === "unknown"/);
 });
 
-test("unsupported profiles are silently released in default Hook modes but never accepted as profiles", () => {
+test("only explicit deny PreToolUse rejects an unsupported Hook profile", () => {
   const released = spawnSync(process.execPath, [path.join(ROOT, "bin", "workloop.mjs"), "hook", "--profile", "codex-safe", "--mode", "nudge"], { encoding: "utf8", input: JSON.stringify({ hook_event_name: "Stop" }) });
   assert.equal(released.status, 0, released.stderr);
   assert.equal(released.stderr, "");
   assert.equal(released.stdout, "");
-  const denied = spawnSync(process.execPath, [path.join(ROOT, "bin", "workloop.mjs"), "hook", "--profile", "codex-safe", "--mode", "deny"], { encoding: "utf8" });
+  const staleStop = spawnSync(process.execPath, [path.join(ROOT, "bin", "workloop.mjs"), "hook", "--profile", "codex-safe", "--mode", "deny"], { encoding: "utf8", input: JSON.stringify({ hook_event_name: "Stop" }) });
+  assert.equal(staleStop.status, 0, staleStop.stderr);
+  assert.equal(staleStop.stderr, "");
+  assert.equal(staleStop.stdout, "");
+  const noEvent = spawnSync(process.execPath, [path.join(ROOT, "bin", "workloop.mjs"), "hook", "--profile", "codex-safe", "--mode", "deny"], { encoding: "utf8" });
+  assert.equal(noEvent.status, 0, noEvent.stderr);
+  assert.equal(noEvent.stderr, "");
+  assert.equal(noEvent.stdout, "");
+  const denied = spawnSync(process.execPath, [path.join(ROOT, "bin", "workloop.mjs"), "hook", "--profile", "codex-safe", "--mode", "deny"], { encoding: "utf8", input: JSON.stringify({ hook_event_name: "PreToolUse" }) });
   assert.equal(denied.status, 2);
   assert.match(denied.stderr, /unsupported hook profile; expected claude\|codex/);
 });

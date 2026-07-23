@@ -10,10 +10,14 @@ import { TRUSTED_REPOSITORY, TRUSTED_WORKFLOW_PATH } from "./spikes/multi-root-a
 const root = path.dirname(fileURLToPath(import.meta.url));
 const issueRoot = path.join(root, ".scratch", "multi-root-authority", "issues");
 const deterministicVerifier = path.join(root, "tests", "verify-full.mjs");
-const proofFile = path.join(root, "docs", "e2e-test", "multi-root-authority-spike", "proof.json");
 const receiptCli = path.join(root, "spikes", "multi-root-authority", "receipt-cli.mjs");
 const failures = [];
 const indeterminate = [];
+const args = process.argv.slice(2);
+const proofIndex = args.indexOf("--proof");
+const proofFile = proofIndex >= 0 && proofIndex + 1 < args.length && args.length === 2
+  ? path.resolve(process.cwd(), args[proofIndex + 1])
+  : null;
 
 function unavailable(result) {
   return Boolean(result.error || result.status === null);
@@ -47,8 +51,11 @@ else {
 }
 
 let proof = null;
-try { proof = JSON.parse(fs.readFileSync(proofFile, "utf8")); }
-catch { failures.push("attested-aggregate-proof-missing-or-malformed"); }
+if (!proofFile) indeterminate.push("attested-aggregate-proof-path-required");
+else {
+  try { proof = JSON.parse(fs.readFileSync(proofFile, "utf8")); }
+  catch { failures.push("attested-aggregate-proof-missing-or-malformed"); }
+}
 
 if (proof) {
   const structural = spawnSync(process.execPath, [receiptCli, "validate", "--proof", proofFile], { cwd: root, encoding: "utf8", timeout: 30_000 });

@@ -4,7 +4,7 @@
 
 **Blocked by:** 03 — Git Main-Worktree Authority Tracer Bullet.
 
-**Status:** complete
+**Status:** resolved
 
 - [x] One attachment can hold multiple live partitioned tasks whose structured write scopes are disjoint.
 - [x] Overlapping live scopes are rejected; suspended tasks retain claims and terminal tasks release them.

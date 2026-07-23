@@ -4,7 +4,7 @@
 
 **Blocked by:** 04 — Git Attachment and Linked-Worktree Lifecycle; 05 — Partitioned Multi-Task and Target-First Routing.
 
-**Status:** complete
+**Status:** resolved
 
 - [x] Explicit exclusive placement creates or selects one linked attachment and permits at most one live task there.
 - [x] Placement, branch intent, base, and write scope are recorded without silently changing the caller's current directory.
