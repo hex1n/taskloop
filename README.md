@@ -2,33 +2,45 @@
 
 [中文说明](README.zh-CN.md)
 
-workloop is a dependency-free Node.js runtime for auditable, multi-root agent
-work. The host owns permission prompts and execution approval. Workloop owns
-only durable task authority, task-scoped Git receipts, attachment recovery,
-criterion certification, and best-effort outcome projection.
+workloop is a dependency-free runtime for **loopengineering**: turning an
+agent's intent into a small engineering loop that can be resumed, checked, and
+handed over. A loop starts with a bounded goal and write scope, records what
+happened, runs an explicit criterion, and leaves evidence for the next human or
+agent.
 
-This release is a hard cut to the provider authority Contract. It accepts no
-old `current-*` command aliases, no old Hook profiles, and no compatibility
-runtime pins. It never reads or converts an earlier task runtime.
+The host owns permission prompts and execution approval. Workloop never becomes
+another approval layer; it supplies durable context and evidence around the
+host's work.
 
-## Authority model
+## The engineering loop
 
-Each task belongs to exactly one provider authority:
+1. **Frame** — open a task with a goal, ownership, and bounded write scope.
+2. **Work** — let the agent and host tools make the change in the chosen root.
+3. **Observe** — retain task-local receipts without deciding whether tools run.
+4. **Verify** — run a read-only acceptance criterion and certify its result.
+5. **Continue** — query, suspend, resume, recover, or hand the loop to another
+   session without rebuilding its context from chat history.
 
-- A Git common directory authority can have main and linked-worktree
-  attachments. Multiple tasks may share an attachment when their write claims
-  are disjoint; task-scoped `stage` and `commit` receipts preserve that
-  separation.
-- A detached filesystem authority is rooted at an explicit `--filesystem-root`.
-  It works for directories outside Git and rejects overlapping/nested claims.
-- An exclusive worktree task creates or uses one explicit linked worktree. It
-  never changes the caller's current worktree or guesses branch cleanup.
+Git receipts, filesystem identity, recovery journals, Hooks, and outcome
+projections are mechanisms that make this loop reliable; they are not the
+product's primary workflow.
 
-Authority records are replayable provider journals. Locators are attachments,
-not authority. Moving an attachment retains its identity; copying one creates a
-collision that must be recovered, reattached, or explicitly forked.
+## Where a loop can run
 
-## Commands
+Each task selects one durable provider for its workspace:
+
+- **Git workspace** — main and linked worktrees can share a repository while
+  disjoint tasks retain separate write scopes and task-scoped receipts.
+- **Any filesystem directory** — an explicit `--filesystem-root` works outside
+  Git, rejects overlapping/nested loops, and needs no repository at all.
+- **Dedicated worktree** — an exclusive loop uses one explicit linked worktree
+  without changing the caller's current worktree or guessing branch cleanup.
+
+The provider journal makes a loop replayable. Paths are attachments rather than
+identity: moving a workspace retains identity, while copying one requires an
+explicit recovery, reattach, or fork.
+
+## Run a loop
 
 The public CLI contains only these verbs:
 
@@ -38,7 +50,7 @@ recover-attachment cleanup-staged-locator reattach abandon-staged-authority
 fork-identity archive-incompatible-state hook hooks
 ```
 
-Open a Git-backed task from a file or directory under the selected worktree:
+Frame a Git-backed loop from a file or directory under the selected worktree:
 
 ```sh
 node bin/workloop.mjs open \
@@ -62,7 +74,8 @@ The certification adapter is read-only and uses tri-state exit codes: `4`
 means satisfied, `3` unsatisfied, and `2` indeterminate. Certification also
 requires the task's matching clean Git receipt to remain landed.
 
-For a non-Git directory, select the filesystem provider explicitly:
+For a non-Git directory, frame the same loop explicitly with the filesystem
+provider. Git is not required:
 
 ```sh
 node bin/workloop.mjs open \
@@ -75,7 +88,7 @@ node bin/workloop.mjs open \
 Use `--authority <authority-id>` for queries and recovery when an attachment is
 unavailable. `status`, `audit`, `ledger`, and `tasks` are read-only.
 
-## Hooks and approval
+## Hooks observe; the host approves
 
 Recipes require one explicit host profile:
 
@@ -84,21 +97,21 @@ node bin/workloop.mjs hooks --profile codex --mode nudge
 node bin/workloop.mjs hooks --profile claude --mode nudge
 ```
 
-`observe` and `nudge` are non-blocking. PreToolUse records an operation intent,
-PostToolUse records a completion receipt, and Stop releases. If provider
-evidence is unavailable, these modes fail open and report that the host still
-owns execution authority. Only an explicitly configured `deny` PreToolUse mode
-can return a rejection; it does not replace the host's approval system.
+`observe` and `nudge` are non-blocking instrumentation: PreToolUse records an
+operation intent, PostToolUse records a completion receipt, and Stop releases.
+If evidence is unavailable, they fail open; the host retains execution
+authority. Only an explicitly configured `deny` PreToolUse mode can return a
+rejection, and it does not replace the host's approval system.
 
 Only `codex` and `claude` are valid profiles. `codex-safe` is intentionally not
 a valid profile.
 
-## Outcome projection and incompatible state
+## Evidence and recovery
 
-Provider authority is the source of truth. A separate, per-authority outcome
-shard is written under `WORKLOOP_AUTHORITY_HOME` (default `~/.workloop`). A
-missing or corrupt shard never changes provider adjudication and is rebuilt on
-the next successful publication.
+The provider journal is the source of truth. A separate, per-loop outcome shard
+is written under `WORKLOOP_AUTHORITY_HOME` (default `~/.workloop`). A missing
+or corrupt shard never changes the loop and is rebuilt on the next successful
+publication.
 
 Earlier repository artifacts are never migrated or interpreted. With explicit
 user provenance, this command copies recognized incompatible files byte-for-byte
@@ -109,7 +122,11 @@ node bin/workloop.mjs archive-incompatible-state --target . \
   --granted-by user --reason "retain pre-provider artifacts"
 ```
 
-## Installation
+## Current runtime and installation
+
+This release is a hard cut to the provider Contract. It accepts no old
+`current-*` command aliases, no old Hook profiles, and no compatibility runtime
+pins. It never reads or converts an earlier task runtime.
 
 ```sh
 node install.mjs
