@@ -1,8 +1,9 @@
 import { spawnSync } from "node:child_process";
 import path from "node:path";
 import process from "node:process";
+import { fileURLToPath } from "node:url";
 
-const root = path.resolve(path.dirname(new URL(import.meta.url).pathname), "..");
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tickets = [2, 3, 4, 5, 6, 7, 8, 9, 10].map((number) =>
   `acceptance-multi-root-authority-ticket${String(number).padStart(2, "0")}.mjs`,
 );
