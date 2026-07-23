@@ -49,13 +49,13 @@ function addWorktree(fx, name, target) {
 
 function openTask(fx, target, commandId, goal) {
   return json(run([
-    "current-open", "--target", path.join(target, "src", "tracked.txt"), "--goal", goal, "--write-root", "src",
+    "open", "--target", path.join(target, "src", "tracked.txt"), "--goal", goal, "--write-root", "src",
     "--command-id", commandId, ...PROVENANCE,
   ], { cwd: fx.root, env: { ...process.env, WORKLOOP_SESSION_ID: `session-${commandId}` } }));
 }
 
 function repositoryTasks(fx) {
-  return json(run(["current-tasks", "--target", fx.repo], { cwd: fx.root }));
+  return json(run(["tasks", "--target", fx.repo], { cwd: fx.root }));
 }
 
 test("main and linked worktrees share authority while target routing preserves attachment identity across move", (t) => {
@@ -76,16 +76,16 @@ test("main and linked worktrees share authority while target routing preserves a
     tool_use_id: sharedOperationId, tool_name: "Write", tool_input: { file_path: target },
   });
   for (const [target, sessionId] of [[path.join(fx.repo, "src", "tracked.txt"), "session-open-main"], [path.join(linkedRoot, "src", "tracked.txt"), "session-open-linked"]]) {
-    const receipt = run(["current-hook", "--profile", "codex-safe", "--mode", "nudge"], { cwd: fx.root, input: hookPayload(target, sessionId) });
+    const receipt = run(["hook", "--profile", "codex", "--mode", "nudge"], { cwd: fx.root, input: hookPayload(target, sessionId) });
     assert.equal(receipt.status, 0, receipt.stderr);
     assert.equal(receipt.stderr, "");
   }
-  const sharedReceipts = json(run(["current-ledger", "--target", fx.repo])).records.filter((record) => record.kind === "operation_intent_recorded" && record.payload.operation_id === sharedOperationId);
+  const sharedReceipts = json(run(["ledger", "--target", fx.repo])).records.filter((record) => record.kind === "operation_intent_recorded" && record.payload.operation_id === sharedOperationId);
   assert.equal(sharedReceipts.length, 2);
   assert.deepEqual(new Set(sharedReceipts.map((record) => record.payload.task_id)), new Set([main.task.task_id, linked.task.task_id]));
 
-  assert.equal(json(run(["current-status", "--target", path.join(fx.repo, "src", "tracked.txt")])).task.task_id, main.task.task_id);
-  assert.equal(json(run(["current-status", "--target", path.join(linkedRoot, "src", "tracked.txt")])).task.task_id, linked.task.task_id);
+  assert.equal(json(run(["status", "--target", path.join(fx.repo, "src", "tracked.txt")])).task.task_id, main.task.task_id);
+  assert.equal(json(run(["status", "--target", path.join(linkedRoot, "src", "tracked.txt")])).task.task_id, linked.task.task_id);
 
   const before = repositoryTasks(fx);
   assert.equal(before.repository_tasks.length, 2);
@@ -98,7 +98,7 @@ test("main and linked worktrees share authority while target routing preserves a
   const movedRoot = path.join(fx.root, "linked-moved");
   git(fx.repo, ["worktree", "move", linkedRoot, movedRoot]);
   const movedCanonical = fs.realpathSync.native(movedRoot);
-  const moved = json(run(["current-status", "--target", path.join(movedRoot, "src", "tracked.txt")], { cwd: fx.root }));
+  const moved = json(run(["status", "--target", path.join(movedRoot, "src", "tracked.txt")], { cwd: fx.root }));
   assert.equal(moved.routable, true);
   assert.equal(moved.attachment_id, linked.attachment_id);
   assert.equal(moved.task.task_id, linked.task.task_id);
@@ -131,7 +131,7 @@ test("remove, prune, and same-path recreation retain old tasks without reusing a
   assert.equal(replacement.authority_id, oldTask.authority_id);
   assert.notEqual(replacement.attachment_id, oldTask.attachment_id);
   assert.notEqual(replacement.task.task_id, oldTask.task.task_id);
-  assert.equal(json(run(["current-status", "--target", path.join(oldRoot, "src", "tracked.txt")])).task.task_id, replacement.task.task_id);
+  assert.equal(json(run(["status", "--target", path.join(oldRoot, "src", "tracked.txt")])).task.task_id, replacement.task.task_id);
 
   const afterReuse = repositoryTasks(fx);
   assert.equal(afterReuse.repository_tasks.length, 2);
@@ -161,7 +161,7 @@ test("main worktree move preserves attachment identity and changes only path obs
   fs.renameSync(fx.repo, movedRoot);
   const observedRoot = fs.realpathSync.native(movedRoot);
 
-  const moved = json(run(["current-status", "--target", path.join(movedRoot, "src", "tracked.txt")], { cwd: fx.root }));
+  const moved = json(run(["status", "--target", path.join(movedRoot, "src", "tracked.txt")], { cwd: fx.root }));
   assert.equal(moved.routable, true);
   assert.equal(moved.attachment_id, opened.attachment_id);
   assert.equal(moved.task.task_id, opened.task.task_id);
@@ -174,7 +174,7 @@ test("main worktree move preserves attachment identity and changes only path obs
 test("hash-valid duplicate stable anchors are rejected by replay", (t) => {
   const fx = fixture(t, "duplicate-anchor");
   openTask(fx, fx.repo, "open-anchor-source", "anchor source");
-  const records = json(run(["current-ledger", "--target", fx.repo])).records;
+  const records = json(run(["ledger", "--target", fx.repo])).records;
   const prior = records.at(-1);
   const stage = records.find((record) => record.kind === "attachment_stage_intent");
   const invalid = {
@@ -186,7 +186,7 @@ test("hash-valid duplicate stable anchors are rejected by replay", (t) => {
   const commonDir = path.resolve(git(fx.repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
   fs.appendFileSync(path.join(commonDir, "workloop", "authority.jsonl"), canonicalJson(invalid) + "\n");
 
-  const rejected = run(["current-status", "--target", path.join(fx.repo, "src", "tracked.txt")]);
+  const rejected = run(["status", "--target", path.join(fx.repo, "src", "tracked.txt")]);
   assert.equal(rejected.status, 2);
   assert.match(rejected.stderr, /attachment anchor uniqueness/);
 });
@@ -199,7 +199,7 @@ test("a copied locator cannot route old task history at another live Git admin a
   const linkedGitDir = path.resolve(git(linkedRoot, ["rev-parse", "--path-format=absolute", "--git-dir"]));
   fs.copyFileSync(main.locator_path, path.join(linkedGitDir, ".workloop-root.jsonl"));
 
-  const copied = json(run(["current-status", "--target", path.join(linkedRoot, "src", "tracked.txt")], { cwd: fx.root }));
+  const copied = json(run(["status", "--target", path.join(linkedRoot, "src", "tracked.txt")], { cwd: fx.root }));
   assert.equal(copied.authority_id, main.authority_id);
   assert.equal(copied.attachment_id, main.attachment_id);
   assert.equal(copied.routable, false);
@@ -207,8 +207,8 @@ test("a copied locator cannot route old task history at another live Git admin a
 
   const provider = fs.readFileSync(path.join(ROOT, "lib", "git-authority-provider.mjs"), "utf8");
   assert.match(provider, /worktree["']?\s*,\s*["']list|worktree list/);
-  const application = fs.readFileSync(path.join(ROOT, "lib", "application.mjs"), "utf8");
-  assert.match(application, /"current-tasks"/);
+  const application = fs.readFileSync(path.join(ROOT, "lib", "provider-application.mjs"), "utf8");
+  assert.match(application, /"tasks"/);
   const scripts = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).scripts;
   for (const name of ["test", "test:matrix", "test:windows"]) assert.match(scripts[name], /tests\/git-linked-worktree-authority\.test\.mjs/);
   const workflow = fs.readFileSync(path.join(ROOT, ".github", "workflows", "test.yml"), "utf8");

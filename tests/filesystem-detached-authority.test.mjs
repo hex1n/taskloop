@@ -28,7 +28,7 @@ function json(result) { assert.equal(result.status, 0, result.stderr || result.s
 function open(fx, { target = null, root = fx.root, id = "open", session = "filesystem-session", writeRoot = "src" } = {}) {
   target ??= path.join(root, writeRoot, "future.txt");
   return json(run(fx, [
-    "current-open", "--target", target, "--filesystem-root", root, "--goal", `filesystem ${id}`,
+    "open", "--target", target, "--filesystem-root", root, "--goal", `filesystem ${id}`,
     "--write-root", writeRoot, "--command-id", id, ...PROVENANCE,
   ], { session }));
 }
@@ -37,7 +37,7 @@ function records(fx, authorityId) { return fs.readFileSync(path.join(fx.home, "a
 test("explicit filesystem root creates a detached authority and locator-only root with partitioned lifecycle", (t) => {
   const fx = fixture(t, "open");
   const implicit = run(fx, [
-    "current-open", "--target", path.join(fx.root, "src", "future.txt"), "--goal", "must be explicit",
+    "open", "--target", path.join(fx.root, "src", "future.txt"), "--goal", "must be explicit",
     "--write-root", "src", "--command-id", "implicit", ...PROVENANCE,
   ], { session: "implicit" });
   assert.equal(implicit.status, 2);
@@ -54,29 +54,29 @@ test("explicit filesystem root creates a detached authority and locator-only roo
   const beta = open(fx, { id: "open-beta", session: "session-beta", writeRoot: "beta" });
   assert.equal(beta.authority_id, alpha.authority_id);
   assert.notEqual(beta.task.task_id, alpha.task.task_id);
-  const alphaStatus = json(run(fx, ["current-status", "--target", path.join(fx.root, "alpha", "later.txt")], { session: "session-alpha" }));
+  const alphaStatus = json(run(fx, ["status", "--target", path.join(fx.root, "alpha", "later.txt")], { session: "session-alpha" }));
   assert.equal(alphaStatus.task.task_id, alpha.task.task_id);
   assert.equal(alphaStatus.routable, true);
   const overlap = run(fx, [
-    "current-open", "--target", path.join(fx.root, "alpha", "nested", "later.txt"), "--filesystem-root", fx.root,
+    "open", "--target", path.join(fx.root, "alpha", "nested", "later.txt"), "--filesystem-root", fx.root,
     "--goal", "overlap", "--write-root", "alpha/nested", "--command-id", "overlap", ...PROVENANCE,
   ], { session: "session-overlap" });
   assert.equal(overlap.status, 2);
   assert.match(overlap.stderr, /write scope overlap/);
-  const joined = json(run(fx, ["current-join", "--target", fx.root, "--task-id", beta.task.task_id, "--command-id", "join-beta", ...PROVENANCE], { session: "session-third" }));
+  const joined = json(run(fx, ["join", "--target", fx.root, "--task-id", beta.task.task_id, "--command-id", "join-beta", ...PROVENANCE], { session: "session-third" }));
   assert.deepEqual(joined.task.participant_session_ids, ["session-beta", "session-third"]);
-  const suspended = json(run(fx, ["current-suspend", "--target", fx.root, "--task-id", alpha.task.task_id, "--command-id", "suspend-alpha", ...PROVENANCE], { session: "session-alpha" }));
+  const suspended = json(run(fx, ["suspend", "--target", fx.root, "--task-id", alpha.task.task_id, "--command-id", "suspend-alpha", ...PROVENANCE], { session: "session-alpha" }));
   assert.equal(suspended.task.lifecycle.state, "suspended");
-  const resumed = json(run(fx, ["current-resume", "--target", fx.root, "--task-id", alpha.task.task_id, "--command-id", "resume-alpha", ...PROVENANCE], { session: "session-alpha" }));
+  const resumed = json(run(fx, ["resume", "--target", fx.root, "--task-id", alpha.task.task_id, "--command-id", "resume-alpha", ...PROVENANCE], { session: "session-alpha" }));
   assert.equal(resumed.task.lifecycle.state, "active");
-  const audit = json(run(fx, ["current-audit", "--target", path.join(fx.root, "beta", "later.txt")], { session: "session-beta" }));
+  const audit = json(run(fx, ["audit", "--target", path.join(fx.root, "beta", "later.txt")], { session: "session-beta" }));
   assert.equal(audit.integrity, "valid");
-  const ledger = json(run(fx, ["current-ledger", "--target", fx.root]));
+  const ledger = json(run(fx, ["ledger", "--target", fx.root]));
   assert.equal(ledger.provider, "filesystem_detached");
   assert.ok(ledger.records.some((record) => record.kind === "task_opened"));
 });
 
-test("current-certify achieves a filesystem task without a Git receipt", (t) => { const fx = fixture(t, "certify"); const opened = open(fx, { id: "certify-open", session: "certify-session", writeRoot: "src" }); fs.writeFileSync(path.join(fx.root, "check.mjs"), "process.exit(4);\n"); const certified = json(run(fx, ["current-certify", "--target", path.join(fx.root, "src", "future.txt"), "--task-id", opened.task.task_id, "--criterion-file", "check.mjs", "--command-id", "filesystem-certify", "--reason", "criterion satisfied", "--granted-by", "self"], { session: "certify-session" })); assert.equal(certified.task.lifecycle.outcome, "achieved"); assert.equal(certified.task.certification.commit_oid, null); });
+test("certify achieves a filesystem task without a Git receipt", (t) => { const fx = fixture(t, "certify"); const opened = open(fx, { id: "certify-open", session: "certify-session", writeRoot: "src" }); fs.writeFileSync(path.join(fx.root, "check.mjs"), "process.exit(4);\n"); const certified = json(run(fx, ["certify", "--target", path.join(fx.root, "src", "future.txt"), "--task-id", opened.task.task_id, "--criterion-file", "check.mjs", "--command-id", "filesystem-certify", "--reason", "criterion satisfied", "--granted-by", "self"], { session: "certify-session" })); assert.equal(certified.task.lifecycle.outcome, "achieved"); assert.equal(certified.task.certification.commit_oid, null); });
 
 test("filesystem outcome shard rebuilds independently from its verified detached authority", (t) => {
   const fx = fixture(t, "outcome");
@@ -84,7 +84,7 @@ test("filesystem outcome shard rebuilds independently from its verified detached
   assert.equal(path.dirname(opened.outcome_path), path.join(fx.home, "outcomes", opened.authority_id));
   fs.writeFileSync(opened.outcome_path, "corrupt\n");
   fs.rmSync(opened.outcome_cursor_path, { force: true });
-  const rebuilt = json(run(fx, ["current-status", "--target", path.join(fx.root, "src", "future.txt")], { session: "outcome-session" }));
+  const rebuilt = json(run(fx, ["status", "--target", path.join(fx.root, "src", "future.txt")], { session: "outcome-session" }));
   const outcome = JSON.parse(fs.readFileSync(rebuilt.outcome_path, "utf8"));
   assert.equal(outcome.authority_id, opened.authority_id);
   assert.equal(outcome.provider, "filesystem_detached");
@@ -98,7 +98,7 @@ test("same-object move keeps detached identity; deletion retains shard and same-
   const oldRecords = records(fx, oldAuthority);
   const moved = path.join(fx.base, "moved-root");
   fs.renameSync(fx.root, moved);
-  const status = json(run(fx, ["current-status", "--target", path.join(moved, "src", "later.txt")], { session: "session-move" }));
+  const status = json(run(fx, ["status", "--target", path.join(moved, "src", "later.txt")], { session: "session-move" }));
   assert.equal(status.authority_id, oldAuthority);
   assert.equal(status.attachment.observed_root_path, fs.realpathSync.native(moved));
   assert.equal(status.attachment.path_status, "moved");
@@ -115,7 +115,7 @@ test("detached roots reject nested authority claims in either order", (t) => {
   const child = path.join(parent.root, "child");
   fs.mkdirSync(child);
   open(parent, { id: "parent-open", session: "parent-session", writeRoot: "src" });
-  const nested = run(parent, ["current-open", "--target", path.join(child, "work.txt"), "--filesystem-root", child, "--goal", "nested", "--write-root", "work", "--command-id", "nested-open", ...PROVENANCE], { session: "child-session" });
+  const nested = run(parent, ["open", "--target", path.join(child, "work.txt"), "--filesystem-root", child, "--goal", "nested", "--write-root", "work", "--command-id", "nested-open", ...PROVENANCE], { session: "child-session" });
   assert.equal(nested.status, 2);
   assert.match(nested.stderr, /overlaps an existing claimed filesystem authority/);
   assert.equal(fs.existsSync(path.join(child, ".workloop-filesystem-root.jsonl")), false);
@@ -124,7 +124,7 @@ test("detached roots reject nested authority claims in either order", (t) => {
   const inverseChild = path.join(inverse.root, "child");
   fs.mkdirSync(inverseChild);
   open(inverse, { root: inverseChild, id: "child-open", session: "child-session", writeRoot: "src" });
-  const parentClaim = run(inverse, ["current-open", "--target", path.join(inverse.root, "work.txt"), "--filesystem-root", inverse.root, "--goal", "parent", "--write-root", "work", "--command-id", "parent-open", ...PROVENANCE], { session: "parent-session" });
+  const parentClaim = run(inverse, ["open", "--target", path.join(inverse.root, "work.txt"), "--filesystem-root", inverse.root, "--goal", "parent", "--write-root", "work", "--command-id", "parent-open", ...PROVENANCE], { session: "parent-session" });
   assert.equal(parentClaim.status, 2);
   assert.match(parentClaim.stderr, /contains an existing claimed filesystem authority/);
   assert.equal(fs.existsSync(path.join(inverse.root, ".workloop-filesystem-root.jsonl")), false);
@@ -134,19 +134,19 @@ test("deleted filesystem root remains auditable and can be abandoned only by its
   const fx = fixture(t, "deleted-selector");
   const opened = open(fx, { id: "deleted-open", session: "deleted-session", writeRoot: "src" });
   fs.rmSync(fx.root, { recursive: true, force: true });
-  const status = json(run(fx, ["current-status", "--authority", opened.authority_id, "--task-id", opened.task.task_id], { session: "deleted-session" }));
+  const status = json(run(fx, ["status", "--authority", opened.authority_id, "--task-id", opened.task.task_id], { session: "deleted-session" }));
   assert.equal(status.routable, false);
   assert.equal(status.routing_reason, "root_unavailable");
-  const audit = json(run(fx, ["current-audit", "--authority", opened.authority_id]));
+  const audit = json(run(fx, ["audit", "--authority", opened.authority_id]));
   assert.equal(audit.integrity, "pending");
   const beforeSuspend = records(fx, opened.authority_id).length;
-  const suspended = run(fx, ["current-suspend", "--authority", opened.authority_id, "--task-id", opened.task.task_id, "--command-id", "deleted-suspend", ...PROVENANCE], { session: "deleted-session" });
+  const suspended = run(fx, ["suspend", "--authority", opened.authority_id, "--task-id", opened.task.task_id, "--command-id", "deleted-suspend", ...PROVENANCE], { session: "deleted-session" });
   assert.equal(suspended.status, 2);
   assert.match(suspended.stderr, /live bound attachment/);
   assert.equal(records(fx, opened.authority_id).length, beforeSuspend);
-  const abandoned = json(run(fx, ["current-abandon", "--authority", opened.authority_id, "--task-id", opened.task.task_id, "--command-id", "deleted-abandon", ...PROVENANCE], { session: "deleted-session" }));
+  const abandoned = json(run(fx, ["abandon", "--authority", opened.authority_id, "--task-id", opened.task.task_id, "--command-id", "deleted-abandon", ...PROVENANCE], { session: "deleted-session" }));
   assert.equal(abandoned.task.lifecycle.state, "terminal");
-  const ledger = json(run(fx, ["current-ledger", "--authority", opened.authority_id]));
+  const ledger = json(run(fx, ["ledger", "--authority", opened.authority_id]));
   assert.ok(ledger.records.some((record) => record.command_id === "deleted-abandon" && record.kind === "task_terminal"));
 });
 
@@ -155,7 +155,7 @@ test("orphaned and staged locators reject open before creating authority records
   const opened = open(fx, { id: "orphan-open", session: "orphan-session", writeRoot: "src" });
   const authorityDirectory = path.join(fx.home, "authorities", opened.authority_id);
   fs.rmSync(authorityDirectory, { recursive: true, force: true });
-  const orphan = run(fx, ["current-open", "--target", path.join(fx.root, "src", "retry.txt"), "--filesystem-root", fx.root, "--goal", "orphan retry", "--write-root", "src", "--command-id", "orphan-retry", ...PROVENANCE], { session: "orphan-session" });
+  const orphan = run(fx, ["open", "--target", path.join(fx.root, "src", "retry.txt"), "--filesystem-root", fx.root, "--goal", "orphan retry", "--write-root", "src", "--command-id", "orphan-retry", ...PROVENANCE], { session: "orphan-session" });
   assert.equal(orphan.status, 2);
   assert.match(orphan.stderr, /explicit attended recovery/);
   assert.equal(fs.existsSync(path.join(authorityDirectory, "authority.jsonl")), false);
@@ -165,7 +165,7 @@ test("orphaned and staged locators reject open before creating authority records
   const staged = fs.readFileSync(path.join(fx.root, ".workloop-filesystem-root.jsonl"), "utf8").split("\n")[0] + "\n";
   fs.writeFileSync(path.join(stagedRoot, ".workloop-filesystem-root.jsonl"), staged);
   const beforeAuthorities = fs.readdirSync(path.join(fx.home, "authorities")).sort();
-  const incomplete = run(fx, ["current-open", "--target", path.join(stagedRoot, "retry.txt"), "--filesystem-root", stagedRoot, "--goal", "staged retry", "--write-root", "src", "--command-id", "staged-retry", ...PROVENANCE], { session: "staged-session" });
+  const incomplete = run(fx, ["open", "--target", path.join(stagedRoot, "retry.txt"), "--filesystem-root", stagedRoot, "--goal", "staged retry", "--write-root", "src", "--command-id", "staged-retry", ...PROVENANCE], { session: "staged-session" });
   assert.equal(incomplete.status, 2);
   assert.match(incomplete.stderr, /incomplete locator claim/);
   assert.deepEqual(fs.readdirSync(path.join(fx.home, "authorities")).sort(), beforeAuthorities);
@@ -173,7 +173,7 @@ test("orphaned and staged locators reject open before creating authority records
   const emptyRoot = path.join(fx.base, "empty-root");
   fs.mkdirSync(emptyRoot);
   fs.writeFileSync(path.join(emptyRoot, ".workloop-filesystem-root.jsonl"), "\n");
-  const empty = run(fx, ["current-open", "--target", path.join(emptyRoot, "retry.txt"), "--filesystem-root", emptyRoot, "--goal", "empty retry", "--write-root", "src", "--command-id", "empty-retry", ...PROVENANCE], { session: "empty-session" });
+  const empty = run(fx, ["open", "--target", path.join(emptyRoot, "retry.txt"), "--filesystem-root", emptyRoot, "--goal", "empty retry", "--write-root", "src", "--command-id", "empty-retry", ...PROVENANCE], { session: "empty-session" });
   assert.equal(empty.status, 2);
   assert.match(empty.stderr, /locator exists without a claim record/);
   assert.deepEqual(fs.readdirSync(path.join(fx.home, "authorities")).sort(), beforeAuthorities);
@@ -187,15 +187,15 @@ test("locator must exactly bind its ledger attachment and default Hook mode fail
   const forged = { ...claimed, claim_token: "00000000-0000-4000-8000-000000000001" };
   delete forged.record_digest; forged.record_digest = sha256Hex(canonicalJson(forged));
   fs.writeFileSync(locatorPath, canonicalJson(staged) + "\n" + canonicalJson(forged) + "\n");
-  const status = json(run(fx, ["current-status", "--target", path.join(fx.root, "src", "later.txt")], { session: "binding-session" }));
+  const status = json(run(fx, ["status", "--target", path.join(fx.root, "src", "later.txt")], { session: "binding-session" }));
   assert.equal(status.routable, false);
   assert.equal(status.routing_reason, "locator_unavailable");
   const before = records(fx, opened.authority_id).length;
-  const reopened = run(fx, ["current-open", "--target", path.join(fx.root, "src", "reopen.txt"), "--filesystem-root", fx.root, "--goal", "rejected forged locator", "--write-root", "src", "--command-id", "forged-reopen", ...PROVENANCE], { session: "binding-session" });
+  const reopened = run(fx, ["open", "--target", path.join(fx.root, "src", "reopen.txt"), "--filesystem-root", fx.root, "--goal", "rejected forged locator", "--write-root", "src", "--command-id", "forged-reopen", ...PROVENANCE], { session: "binding-session" });
   assert.equal(reopened.status, 2);
   assert.match(reopened.stderr, /explicit attended recovery/);
   assert.equal(records(fx, opened.authority_id).length, before);
-  const hook = run(fx, ["current-hook", "--profile", "codex-safe", "--mode", "nudge"], { cwd: fx.root, input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.root, session_id: "binding-session", tool_use_id: "binding-hook", tool_name: "Write", tool_input: { file_path: path.join(fx.root, "src", "later.txt") } }) });
+  const hook = run(fx, ["hook", "--profile", "codex", "--mode", "nudge"], { cwd: fx.root, input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.root, session_id: "binding-session", tool_use_id: "binding-hook", tool_name: "Write", tool_input: { file_path: path.join(fx.root, "src", "later.txt") } }) });
   assert.equal(hook.status, 0);
   assert.match(hook.stderr, /host retains execution authority/);
   assert.equal(records(fx, opened.authority_id).length, before);
@@ -204,7 +204,7 @@ test("locator must exactly bind its ledger attachment and default Hook mode fail
 test("reused filesystem command ids must bind scope and provenance", (t) => {
   const fx = fixture(t, "command-binding");
   open(fx, { id: "same-command", session: "same-session", writeRoot: "src" });
-  const changed = run(fx, ["current-open", "--target", path.join(fx.root, "src", "future.txt"), "--filesystem-root", fx.root, "--goal", "filesystem same-command", "--write-root", "src", "--command-id", "same-command", "--reason", "changed provenance", "--granted-by", "self"], { session: "same-session" });
+  const changed = run(fx, ["open", "--target", path.join(fx.root, "src", "future.txt"), "--filesystem-root", fx.root, "--goal", "filesystem same-command", "--write-root", "src", "--command-id", "same-command", "--reason", "changed provenance", "--granted-by", "self"], { session: "same-session" });
   assert.equal(changed.status, 2);
   assert.match(changed.stderr, /command conflicts with its durable intent/);
 });
@@ -215,7 +215,7 @@ test("copied locator is never accepted as an automatic move after its original r
   const copied = path.join(fx.base, "copied-root");
   fs.cpSync(fx.root, copied, { recursive: true });
   fs.rmSync(fx.root, { recursive: true, force: true });
-  const status = json(run(fx, ["current-status", "--target", path.join(copied, "src", "later.txt")], { session: "copy-session" }));
+  const status = json(run(fx, ["status", "--target", path.join(copied, "src", "later.txt")], { session: "copy-session" }));
   assert.equal(status.routable, false);
   assert.equal(status.routing_reason, "attachment_collision");
 });
@@ -223,11 +223,11 @@ test("copied locator is never accepted as an automatic move after its original r
 test("a Git initialization inside a claimed filesystem root is an authority-kind conflict and filesystem exposes no Git operation surface", (t) => {
   const fx = fixture(t, "git-conflict");
   open(fx, { id: "open-conflict", session: "session-conflict", writeRoot: "src" });
-  const stage = run(fx, ["current-stage", "--target", path.join(fx.root, "src", "later.txt"), "--task-id", "not-used", "--command-id", "not-used", "--reason", "filesystem boundary", "--granted-by", "user"], { session: "session-conflict" });
+  const stage = run(fx, ["stage", "--target", path.join(fx.root, "src", "later.txt"), "--task-id", "not-used", "--command-id", "not-used", "--reason", "filesystem boundary", "--granted-by", "user"], { session: "session-conflict" });
   assert.equal(stage.status, 2);
   assert.match(stage.stderr, /unavailable for detached filesystem authorities/i);
   execFileSync("git", ["init", "-q"], { cwd: fx.root });
-  const status = run(fx, ["current-status", "--target", path.join(fx.root, "src", "later.txt")], { session: "session-conflict" });
+  const status = run(fx, ["status", "--target", path.join(fx.root, "src", "later.txt")], { session: "session-conflict" });
   assert.equal(status.status, 2);
   assert.match(status.stderr, /authority.*conflict|contained by Git/i);
 
@@ -237,7 +237,7 @@ test("filesystem Hook records receipts without claiming host execution authority
   const fx = fixture(t, "hook");
   const opened = open(fx, { id: "open-hook", session: "session-hook", writeRoot: "src" });
   const target = path.join(fx.root, "src", "written.txt");
-  const result = run(fx, ["current-hook", "--profile", "codex-safe", "--mode", "nudge"], {
+  const result = run(fx, ["hook", "--profile", "codex", "--mode", "nudge"], {
     cwd: fx.root, input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.root, session_id: "session-hook", permission_mode: "bypassPermissions", tool_use_id: "filesystem-hook", tool_name: "Write", tool_input: { file_path: target } }),
   });
   assert.equal(result.status, 0, result.stderr);

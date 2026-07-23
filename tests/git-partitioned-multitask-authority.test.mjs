@@ -39,19 +39,19 @@ function fixture(t, name) {
 function openTask(repo, { id, session, writeRoot, writePath = null, target = null }) {
   const claims = writePath === null ? ["--write-root", writeRoot] : ["--write-path", writePath];
   return json(run([
-    "current-open", "--target", target ?? path.join(repo, writeRoot ?? path.dirname(writePath), "future.txt"),
+    "open", "--target", target ?? path.join(repo, writeRoot ?? path.dirname(writePath), "future.txt"),
     "--goal", `task ${id}`, ...claims, "--command-id", id, ...PROVENANCE,
   ], { cwd: repo, session }));
 }
 function mutate(repo, action, taskId, commandId, session) {
   return run([
-    `current-${action}`, "--target", repo, "--task-id", taskId,
+    `${action}`, "--target", repo, "--task-id", taskId,
     "--command-id", commandId, "--reason", `${action} for Ticket 05`, "--granted-by", "self",
   ], { cwd: repo, session });
 }
-function ledger(target) { return json(run(["current-ledger", "--target", target], { cwd: ROOT })).records; }
+function ledger(target) { return json(run(["ledger", "--target", target], { cwd: ROOT })).records; }
 function preHook({ cwd, session, operationId, toolName = "Write", toolInput }) {
-  return run(["current-hook", "--profile", "codex-safe", "--mode", "nudge"], {
+  return run(["hook", "--profile", "codex", "--mode", "nudge"], {
     cwd,
     input: JSON.stringify({
       hook_event_name: "PreToolUse", cwd, session_id: session, permission_mode: "bypassPermissions",
@@ -64,7 +64,7 @@ test("one attachment hosts disjoint tasks; live claims and session bindings foll
   const fx = fixture(t, "lifecycle");
   const commonDir = path.resolve(git(fx.repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
   const withoutSession = run([
-    "current-open", "--target", path.join(fx.repo, "alpha", "future.txt"), "--goal", "host session required",
+    "open", "--target", path.join(fx.repo, "alpha", "future.txt"), "--goal", "host session required",
     "--write-root", "alpha", "--command-id", "missing-session", ...PROVENANCE,
   ], { cwd: fx.repo });
   assert.equal(withoutSession.status, 2);
@@ -72,13 +72,13 @@ test("one attachment hosts disjoint tasks; live claims and session bindings foll
   assert.equal(fs.existsSync(path.join(commonDir, "workloop", "authority.jsonl")), false);
 
   const legacy = run([
-    "current-open", "--target", fx.repo, "--goal", "legacy is forbidden",
+    "open", "--target", fx.repo, "--goal", "legacy is forbidden",
     "--files", "alpha/**", "--command-id", "legacy-open", ...PROVENANCE,
   ], { cwd: fx.repo, session: "session-legacy" });
   assert.equal(legacy.status, 2);
   assert.match(legacy.stderr, /Unknown option '--files'/);
   const glob = run([
-    "current-open", "--target", fx.repo, "--goal", "glob is forbidden",
+    "open", "--target", fx.repo, "--goal", "glob is forbidden",
     "--write-root", "alpha/**", "--command-id", "glob-open", ...PROVENANCE,
   ], { cwd: fx.repo, session: "session-glob" });
   assert.equal(glob.status, 2);
@@ -89,29 +89,29 @@ test("one attachment hosts disjoint tasks; live claims and session bindings foll
   assert.equal(beta.authority_id, alpha.authority_id);
   assert.equal(beta.attachment_id, alpha.attachment_id);
   assert.notEqual(beta.task.task_id, alpha.task.task_id);
-  const catalog = json(run(["current-tasks", "--target", fx.repo], { cwd: fx.repo }));
+  const catalog = json(run(["tasks", "--target", fx.repo], { cwd: fx.repo }));
   assert.equal(catalog.repository_attachments.length, 1);
   assert.equal(catalog.repository_tasks.length, 2);
 
-  const alphaStatus = json(run(["current-status", "--target", path.join(fx.repo, "alpha", "tracked.txt")], { cwd: fx.repo, session: "session-alpha" }));
-  const betaStatus = json(run(["current-status", "--target", path.join(fx.repo, "beta", "tracked.txt")], { cwd: fx.repo, session: "session-beta" }));
+  const alphaStatus = json(run(["status", "--target", path.join(fx.repo, "alpha", "tracked.txt")], { cwd: fx.repo, session: "session-alpha" }));
+  const betaStatus = json(run(["status", "--target", path.join(fx.repo, "beta", "tracked.txt")], { cwd: fx.repo, session: "session-beta" }));
   assert.equal(alphaStatus.task.task_id, alpha.task.task_id);
   assert.equal(betaStatus.task.task_id, beta.task.task_id);
-  const wrongSession = json(run(["current-status", "--target", path.join(fx.repo, "alpha", "tracked.txt")], { cwd: fx.repo, session: "session-beta" }));
+  const wrongSession = json(run(["status", "--target", path.join(fx.repo, "alpha", "tracked.txt")], { cwd: fx.repo, session: "session-beta" }));
   assert.equal(wrongSession.routable, false);
   assert.equal(wrongSession.routing_reason, "session_task_mismatch");
-  const ambiguousRoot = json(run(["current-status", "--target", fx.repo], { cwd: fx.repo }));
+  const ambiguousRoot = json(run(["status", "--target", fx.repo], { cwd: fx.repo }));
   assert.equal(ambiguousRoot.routable, false);
   assert.equal(ambiguousRoot.routing_reason, "task_scope_unclaimed");
 
   const overlap = run([
-    "current-open", "--target", path.join(fx.repo, "alpha", "nested", "future.txt"), "--goal", "overlap",
+    "open", "--target", path.join(fx.repo, "alpha", "nested", "future.txt"), "--goal", "overlap",
     "--write-root", "alpha/nested", "--command-id", "open-overlap", ...PROVENANCE,
   ], { cwd: fx.repo, session: "session-overlap" });
   assert.equal(overlap.status, 2);
   assert.match(overlap.stderr, /write scope overlap/);
   const sameSession = run([
-    "current-open", "--target", path.join(fx.repo, "gamma", "future.txt"), "--goal", "same session",
+    "open", "--target", path.join(fx.repo, "gamma", "future.txt"), "--goal", "same session",
     "--write-root", "gamma", "--command-id", "open-same-session", ...PROVENANCE,
   ], { cwd: fx.repo, session: "session-alpha" });
   assert.equal(sameSession.status, 2);
@@ -120,7 +120,7 @@ test("one attachment hosts disjoint tasks; live claims and session bindings foll
   const suspended = json(mutate(fx.repo, "suspend", alpha.task.task_id, "suspend-alpha", "session-alpha"));
   assert.equal(suspended.task.lifecycle.state, "suspended");
   const retained = run([
-    "current-open", "--target", path.join(fx.repo, "alpha", "future-2.txt"), "--goal", "retained claim",
+    "open", "--target", path.join(fx.repo, "alpha", "future-2.txt"), "--goal", "retained claim",
     "--write-root", "alpha", "--command-id", "open-retained", ...PROVENANCE,
   ], { cwd: fx.repo, session: "session-new" });
   assert.equal(retained.status, 2);
@@ -148,7 +148,7 @@ test("tracked state never selects authority and control targets are excluded bef
     path.join(fx.repo, "work", "not-created", "future.txt"),
   ];
   for (const target of targets) {
-    const status = json(run(["current-status", "--target", target], { cwd: fx.repo }));
+    const status = json(run(["status", "--target", target], { cwd: fx.repo }));
     assert.equal(status.authority_id, opened.authority_id);
     assert.equal(status.attachment_id, opened.attachment_id);
     assert.equal(status.task.task_id, opened.task.task_id);
@@ -157,7 +157,7 @@ test("tracked state never selects authority and control targets are excluded bef
   const commonDir = path.resolve(git(fx.repo, ["rev-parse", "--path-format=absolute", "--git-common-dir"]));
   const before = ledger(fx.repo).length;
   for (const control of [path.join(commonDir, "config"), path.join(fx.repo, ".workloop", "private")]) {
-    const status = run(["current-status", "--target", control], { cwd: fx.repo, session: "session-work" });
+    const status = run(["status", "--target", control], { cwd: fx.repo, session: "session-work" });
     assert.equal(status.status, 2);
     assert.match(status.stderr, /control paths/);
     const hook = preHook({ cwd: fx.repo, session: "session-work", operationId: "control-" + path.basename(control), toolInput: { file_path: control } });
@@ -217,7 +217,7 @@ test("repository-root routing requires an explicit root claim", (t) => {
   const fx = fixture(t, "root-routing");
   fs.mkdirSync(path.join(fx.repo, "..."));
   const dottedRoot = run([
-    "current-open", "--target", fx.repo, "--goal", "dot-named directory must not expand",
+    "open", "--target", fx.repo, "--goal", "dot-named directory must not expand",
     "--write-root", "...", "--command-id", "open-dot-name-at-root", ...PROVENANCE,
   ], { cwd: fx.repo, session: "session-dot-name" });
   assert.equal(dottedRoot.status, 2);
@@ -235,18 +235,18 @@ test("repository-root routing requires an explicit root claim", (t) => {
   const alpha = openTask(fx.repo, { id: "open-root-alpha", session: "session-alpha", writeRoot: "alpha" });
 
   const explicit = json(run([
-    "current-status", "--target", fx.repo, "--task-id", alpha.task.task_id,
+    "status", "--target", fx.repo, "--task-id", alpha.task.task_id,
   ], { cwd: fx.repo, session: "session-alpha" }));
   assert.equal(explicit.routable, false);
   assert.equal(explicit.routing_reason, "task_scope_unclaimed");
 
-  const implicit = json(run(["current-status", "--target", fx.repo], { cwd: fx.repo, session: "session-alpha" }));
+  const implicit = json(run(["status", "--target", fx.repo], { cwd: fx.repo, session: "session-alpha" }));
   assert.equal(implicit.routable, false);
   assert.equal(implicit.routing_reason, "task_scope_unclaimed");
 
   const beforeMismatchedOpen = ledger(fx.repo).length;
   const mismatchedOpen = run([
-    "current-open", "--target", fx.repo, "--goal", "root target with child claim",
+    "open", "--target", fx.repo, "--goal", "root target with child claim",
     "--write-root", "beta", "--command-id", "open-root-mismatch", ...PROVENANCE,
   ], { cwd: fx.repo, session: "session-beta" });
   assert.equal(mismatchedOpen.status, 2);
@@ -259,14 +259,14 @@ test("repository-root routing requires an explicit root claim", (t) => {
   });
   assert.deepEqual(rootTask.task.write_claims, [{ kind: "root", path: "." }]);
   assert.equal(rootTask.routable, true);
-  const nested = json(run(["current-status", "--target", path.join(fx.repo, "beta", "tracked.txt")], {
+  const nested = json(run(["status", "--target", path.join(fx.repo, "beta", "tracked.txt")], {
     cwd: fx.repo, session: "session-root",
   }));
   assert.equal(nested.task.task_id, rootTask.task.task_id);
 
   const beforeOverlap = ledger(fx.repo).length;
   const overlap = run([
-    "current-open", "--target", path.join(fx.repo, "gamma", "future.txt"), "--goal", "root overlap",
+    "open", "--target", path.join(fx.repo, "gamma", "future.txt"), "--goal", "root overlap",
     "--write-root", "gamma", "--command-id", "open-root-overlap", ...PROVENANCE,
   ], { cwd: fx.repo, session: "session-gamma" });
   assert.equal(overlap.status, 2);
@@ -288,7 +288,7 @@ test("canonical claim identity closes symlink and case aliases and sorts without
 
   const beforeOverlap = ledger(fx.repo).length;
   const physicalOverlap = run([
-    "current-open", "--target", path.join(fx.repo, "alpha", "nested", "future.txt"), "--goal", "physical overlap",
+    "open", "--target", path.join(fx.repo, "alpha", "nested", "future.txt"), "--goal", "physical overlap",
     "--write-root", "alpha/nested", "--command-id", "open-physical-overlap", ...PROVENANCE,
   ], { cwd: fx.repo, session: "session-physical-overlap" });
   assert.equal(physicalOverlap.status, 2);
@@ -297,7 +297,7 @@ test("canonical claim identity closes symlink and case aliases and sorts without
 
   if (process.platform === "win32" || process.platform === "darwin") {
     const caseOverlap = run([
-      "current-open", "--target", path.join(fx.repo, "ALPHA", "other.txt"), "--goal", "case overlap",
+      "open", "--target", path.join(fx.repo, "ALPHA", "other.txt"), "--goal", "case overlap",
       "--write-root", "ALPHA", "--command-id", "open-case-overlap", ...PROVENANCE,
     ], { cwd: fx.repo, session: "session-case-overlap" });
     assert.equal(caseOverlap.status, 2);
@@ -306,7 +306,7 @@ test("canonical claim identity closes symlink and case aliases and sorts without
   }
 
   const ordered = json(run([
-    "current-open", "--target", path.join(fx.repo, "gamma", "Z.txt"), "--goal", "deterministic claim order",
+    "open", "--target", path.join(fx.repo, "gamma", "Z.txt"), "--goal", "deterministic claim order",
     "--write-path", "gamma/©.txt", "--write-path", "gamma/Z.txt", "--write-path", "gamma/a.txt",
     "--command-id", "open-ordered", ...PROVENANCE,
   ], { cwd: fx.repo, session: "session-ordered" }));
@@ -320,12 +320,12 @@ test("explicit task selection and lifecycle mutations cannot cross target attach
   openTask(fx.repo, { id: "open-explicit-beta", session: "session-beta", writeRoot: "beta" });
 
   const wrongScope = json(run([
-    "current-status", "--target", path.join(fx.repo, "beta", "tracked.txt"), "--task-id", alpha.task.task_id,
+    "status", "--target", path.join(fx.repo, "beta", "tracked.txt"), "--task-id", alpha.task.task_id,
   ], { cwd: fx.repo, session: "session-alpha" }));
   assert.equal(wrongScope.routable, false);
   assert.equal(wrongScope.routing_reason, "task_scope_unclaimed");
   const wrongSession = json(run([
-    "current-status", "--target", path.join(fx.repo, "alpha", "tracked.txt"), "--task-id", alpha.task.task_id,
+    "status", "--target", path.join(fx.repo, "alpha", "tracked.txt"), "--task-id", alpha.task.task_id,
   ], { cwd: fx.repo, session: "session-beta" }));
   assert.equal(wrongSession.routable, false);
   assert.equal(wrongSession.routing_reason, "session_task_mismatch");

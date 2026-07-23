@@ -34,14 +34,14 @@ function fixture(t, name) {
 }
 function createExclusive(fx, { id = "exclusive-open", session = "session-exclusive", linked = path.join(fx.root, "linked"), branch = "workloop/exclusive-one" } = {}) {
   return json(run([
-    "current-open", "--target", path.join(fx.repo, "src", "tracked.txt"),
+    "open", "--target", path.join(fx.repo, "src", "tracked.txt"),
     "--placement", "exclusive-worktree", "--worktree-path", linked,
     "--branch", branch, "--base", fx.base,
     "--goal", "exclusive task", "--write-root", "src",
     "--command-id", id, ...PROVENANCE,
   ], { cwd: fx.repo, session }));
 }
-function ledger(target) { return json(run(["current-ledger", "--target", target], { cwd: ROOT })).records; }
+function ledger(target) { return json(run(["ledger", "--target", target], { cwd: ROOT })).records; }
 
 test("explicit exclusive placement creates one linked attachment without changing caller cwd or main HEAD", (t) => {
   const fx = fixture(t, "create");
@@ -61,12 +61,12 @@ test("explicit exclusive placement creates one linked attachment without changin
   const kinds = ledger(fx.repo).map((record) => record.kind);
   assert.deepEqual(kinds.slice(0, 3), ["authority_genesis", "exclusive_worktree_intent", "exclusive_worktree_ready"]);
   assert.equal(kinds.at(-1), "task_opened");
-  const status = json(run(["current-status", "--target", path.join(linked, "src", "tracked.txt")], { cwd: fx.repo }));
+  const status = json(run(["status", "--target", path.join(linked, "src", "tracked.txt")], { cwd: fx.repo }));
   assert.equal(status.task.task_id, opened.task.task_id);
   assert.equal(status.routable, true);
 
   const second = run([
-    "current-open", "--target", path.join(linked, "other", "tracked.txt"),
+    "open", "--target", path.join(linked, "other", "tracked.txt"),
     "--placement", "partitioned", "--goal", "must not share exclusive attachment",
     "--write-root", "other", "--command-id", "second-live", ...PROVENANCE,
   ], { cwd: linked, session: "session-second" });
@@ -74,7 +74,7 @@ test("explicit exclusive placement creates one linked attachment without changin
   assert.match(second.stderr, /exclusive|placement/i);
 
   const mainTask = json(run([
-    "current-open", "--target", path.join(fx.repo, "other", "tracked.txt"),
+    "open", "--target", path.join(fx.repo, "other", "tracked.txt"),
     "--placement", "partitioned", "--goal", "main partitioned task",
     "--write-root", "other", "--command-id", "main-partitioned", ...PROVENANCE,
   ], { cwd: fx.repo, session: "session-main" }));
@@ -88,7 +88,7 @@ test("existing linked worktree selection verifies explicit branch and base befor
   git(fx.repo, ["worktree", "add", "-q", "-b", "workloop/selected", linked, fx.base]);
 
   const wrong = run([
-    "current-open", "--target", path.join(linked, "src", "tracked.txt"),
+    "open", "--target", path.join(linked, "src", "tracked.txt"),
     "--placement", "exclusive-worktree", "--branch", "workloop/wrong", "--base", fx.base,
     "--goal", "wrong branch", "--write-root", "src", "--command-id", "wrong-select", ...PROVENANCE,
   ], { cwd: fx.repo });
@@ -97,7 +97,7 @@ test("existing linked worktree selection verifies explicit branch and base befor
   assert.equal(fs.existsSync(path.join(path.resolve(git(fx.repo, ["rev-parse", "--git-common-dir"])), "workloop", "authority.jsonl")), false);
 
   const selected = json(run([
-    "current-open", "--target", path.join(linked, "src", "tracked.txt"),
+    "open", "--target", path.join(linked, "src", "tracked.txt"),
     "--placement", "exclusive-worktree", "--branch", "workloop/selected", "--base", fx.base,
     "--goal", "selected task", "--write-root", "src", "--command-id", "selected-open", ...PROVENANCE,
   ], { cwd: fx.repo }));
@@ -113,14 +113,14 @@ test("exclusive worktree removal preserves unavailable task truth and never clea
   fs.rmSync(linked, { recursive: true, force: true });
   git(fx.repo, ["worktree", "prune", "--expire", "now"]);
 
-  const tasks = json(run(["current-tasks", "--target", fx.repo], { cwd: fx.repo }));
+  const tasks = json(run(["tasks", "--target", fx.repo], { cwd: fx.repo }));
   const row = tasks.repository_tasks.find((item) => item.task.task_id === opened.task.task_id);
   assert.equal(row.availability, "unavailable");
   assert.equal(row.task.placement, "exclusive_worktree");
   assert.equal(git(fx.repo, ["show-ref", "--verify", "--hash", "refs/heads/workloop/retained"]), fx.base);
   assert.equal(fs.existsSync(linked), false);
   const retry = run([
-    "current-open", "--target", path.join(fx.repo, "src", "tracked.txt"),
+    "open", "--target", path.join(fx.repo, "src", "tracked.txt"),
     "--placement", "exclusive-worktree", "--worktree-path", linked, "--branch", "workloop/retained", "--base", fx.base,
     "--goal", "exclusive task", "--write-root", "src", "--command-id", "exclusive-open", ...PROVENANCE,
   ], { cwd: fx.repo });
@@ -138,7 +138,7 @@ test("exclusive placement input is explicit, bounded, idempotent, and never gues
     ["--placement", "partitioned", "--worktree-path", linked],
   ]) {
     const result = run([
-      "current-open", "--target", path.join(fx.repo, "src", "tracked.txt"), ...args,
+      "open", "--target", path.join(fx.repo, "src", "tracked.txt"), ...args,
       "--goal", "invalid placement", "--write-root", "src", "--command-id", `invalid-${args.join("-")}`, ...PROVENANCE,
     ], { cwd: fx.repo });
     assert.equal(result.status, 2);
@@ -162,7 +162,7 @@ test("exclusive placement rejects invalid claims and nested Git worktrees before
   const linked = path.join(fx.root, "linked");
   const excessive = Array.from({ length: 65 }, (_, index) => ["--write-root", "src/claim-" + index]).flat();
   const invalid = run([
-    "current-open", "--target", path.join(fx.repo, "src", "tracked.txt"),
+    "open", "--target", path.join(fx.repo, "src", "tracked.txt"),
     "--placement", "exclusive-worktree", "--worktree-path", linked, "--branch", "workloop/invalid-claims", "--base", fx.base,
     "--goal", "invalid claims", ...excessive, "--command-id", "invalid-claims", ...PROVENANCE,
   ], { cwd: fx.repo });
@@ -176,7 +176,7 @@ test("exclusive placement rejects invalid claims and nested Git worktrees before
   git(fx.repo, ["worktree", "add", "-q", "-b", "workloop/first", first, fx.base]);
   const nested = path.join(first, "nested");
   const nestedResult = run([
-    "current-open", "--target", path.join(fx.repo, "src", "tracked.txt"),
+    "open", "--target", path.join(fx.repo, "src", "tracked.txt"),
     "--placement", "exclusive-worktree", "--worktree-path", nested, "--branch", "workloop/nested", "--base", fx.base,
     "--goal", "nested", "--write-root", "src", "--command-id", "nested-reject", ...PROVENANCE,
   ], { cwd: fx.repo });
@@ -189,7 +189,7 @@ test("exclusive placement rejects invalid claims and nested Git worktrees before
   git(foreign, ["init", "-q"]);
   const foreignNested = path.join(foreign, "nested");
   const foreignResult = run([
-    "current-open", "--target", path.join(fx.repo, "src", "tracked.txt"),
+    "open", "--target", path.join(fx.repo, "src", "tracked.txt"),
     "--placement", "exclusive-worktree", "--worktree-path", foreignNested, "--branch", "workloop/foreign", "--base", fx.base,
     "--goal", "foreign nested", "--write-root", "src", "--command-id", "foreign-reject", ...PROVENANCE,
   ], { cwd: fx.repo });
@@ -204,7 +204,7 @@ test("pending exclusive creation binds the complete request and never adopts par
   fs.writeFileSync(blockedParent, "file");
   const linked = path.join(blockedParent, "linked");
   const args = [
-    "current-open", "--target", path.join(fx.repo, "src", "tracked.txt"),
+    "open", "--target", path.join(fx.repo, "src", "tracked.txt"),
     "--placement", "exclusive-worktree", "--worktree-path", linked, "--branch", "workloop/pending", "--base", fx.base,
     "--goal", "pending create", "--write-root", "src", "--command-id", "pending-create", ...PROVENANCE,
   ];

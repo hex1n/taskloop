@@ -771,11 +771,7 @@ function inspectHookEvent({ host, event, handlers, configuredIn, expectedProfile
   }
   const profilePattern = new RegExp(`\\bhook\\s+--profile\\s+${expectedProfile}\\b`);
   if (!handlers.every((handler) => profilePattern.test(handler.command))) {
-    if (host === "Codex" && handlers.some((handler) => /\bhook\s+--profile\s+codex-cli-legacy\b/.test(handler.command))) {
-      plan("warning", `experimental Codex CLI legacy ${event} hook found in ${locations}; never use it in Codex App. Generate a safe recipe with workloop hooks --profile codex-safe --mode nudge; configuration preserved`);
-      return;
-    }
-    plan("warning", `legacy ${host} workloop ${event} hook found in ${locations}; ${recipe}`);
+    plan("warning", `incompatible ${host} workloop ${event} hook found in ${locations}; ${recipe}`);
     return;
   }
   if (handlers.some((handler) => handler.timeout !== contract.timeout)) {
@@ -814,7 +810,7 @@ function inspectCodexHookProfiles(home) {
   if (!workloopHandlers.length) return;
   const configuredIn = workloopHandlers.map((handler) => handler.config);
   for (const event of CODEX_HOOK_EVENTS) {
-    inspectHookEvent({ host: "Codex", event, handlers: workloopHandlers.filter((handler) => handler.event === event), configuredIn, expectedProfile: "codex-safe" });
+    inspectHookEvent({ host: "Codex", event, handlers: workloopHandlers.filter((handler) => handler.event === event), configuredIn, expectedProfile: "codex" });
   }
 }
 
@@ -1115,18 +1111,12 @@ const CONTROL_FILE_SHAPES = {
       && Object.values(parsed.runtimes).every((skills) => isPlainObject(skills)
         && Object.entries(skills).every(([name, digest]) => SKILL_NAME_SHAPE.test(name) && typeof digest === "string" && TREE_DIGEST_SHAPE.test(digest)))),
   ".workloop-active-release.json": (parsed) => isPlainObject(parsed)
-    && [1, 2].includes(parsed.release_manifest_version)
+    && parsed.release_manifest_version === 3
     && typeof parsed.release_id === "string" && RUNTIME_HASH_SHAPE.test(parsed.release_id)
     && Number.isInteger(parsed.runtime_contract) && parsed.runtime_contract > 0
     && typeof parsed.runtime_digest === "string" && RUNTIME_HASH_SHAPE.test(parsed.runtime_digest)
     && (parsed.managed_skills_manifest_digest === null
-      || (typeof parsed.managed_skills_manifest_digest === "string" && TREE_DIGEST_SHAPE.test(parsed.managed_skills_manifest_digest)))
-    && (parsed.release_manifest_version === 1 || (
-      isPlainObject(parsed.compatibility_runtimes)
-      && new Set(["contract_5", "contract_5,contract_6"]).has(Object.keys(parsed.compatibility_runtimes).join(","))
-      && Object.values(parsed.compatibility_runtimes).every((digest) => digest === null
-        || (typeof digest === "string" && RUNTIME_HASH_SHAPE.test(digest)))
-    )),
+      || (typeof parsed.managed_skills_manifest_digest === "string" && TREE_DIGEST_SHAPE.test(parsed.managed_skills_manifest_digest))),
   ".workloop-activation-journal.json": (parsed) => isPlainObject(parsed)
     && parsed.journal_version === 1
     && typeof parsed.release_id === "string" && RUNTIME_HASH_SHAPE.test(parsed.release_id)
@@ -1293,8 +1283,6 @@ export function installWorkloopAssets(repo, home, dry = false) {
 export function installWorkloop(repo, home, dry = false) {
   ACTIONS.length = 0;
   const install = () => {
-    if (RUNTIME_CONTRACT >= 6 && !ISOLATED_INSTALL) assertSourceActivationCompatible(repo);
-    const compatibilityRuntimes = compatibilityRuntimePins(home);
     const runtime = installWorkloopRuntimeUnlocked(repo, home, dry, { activate: false });
     const releaseId = runtime.hash;
     const journal = path.join(home, "bin", ".workloop-activation-journal.json");
@@ -1336,12 +1324,11 @@ export function installWorkloop(repo, home, dry = false) {
       installFailpoint("shim-activated");
       const skillManifest = path.join(home, "bin", ".workloop-managed-skills.json");
       const manifestRow = {
-        release_manifest_version: 2,
+        release_manifest_version: 3,
         release_id: releaseId,
         runtime_contract: RUNTIME_CONTRACT,
         runtime_digest: runtime.hash,
         managed_skills_manifest_digest: dry || !exists(skillManifest) ? null : createHash("sha256").update(fs.readFileSync(skillManifest)).digest("hex"),
-        compatibility_runtimes: compatibilityRuntimes,
       };
       writeTextAtomicIfChanged(releaseManifest, JSON.stringify(manifestRow, null, 2) + "\n", dry);
       journalRow.steps.manifest_committed = true;
@@ -1374,7 +1361,7 @@ export function installWorkloop(repo, home, dry = false) {
       if (rollbackFailures.length) throw new AggregateError([error, ...rollbackFailures], "Workloop activation failed and rollback was incomplete");
       throw error;
     }
-    pruneRuntimes(path.join(home, "bin", ".workloop-runtime"), runtime.hash, dry, Object.values(compatibilityRuntimes));
+    pruneRuntimes(path.join(home, "bin", ".workloop-runtime"), runtime.hash, dry);
     return runtime;
   };
   return dry ? install() : withInstallLock(home, install);

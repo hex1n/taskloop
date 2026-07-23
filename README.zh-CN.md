@@ -20,7 +20,7 @@ workloop 是一个零依赖 Node.js CLI，也是面向 coding agent 的可移植
 ## 仓库结构
 
 - `bin/workloop.mjs` 只是进程入口。
-- `lib/application.mjs` 是唯一装配层，负责 CLI verb、hook dispatch、事件提交、snapshot、projection 和 report。
+- `lib/provider-application.mjs` 是唯一装配层，负责 CLI verb、hook dispatch、事件提交、snapshot、projection 和 report。
 - `lib/` 下叶子模块只能导入 `lib/prims.mjs`，架构测试会强制这个边界。
 - `lib/task-engine.mjs` 拥有生命周期转移、策略决策、closure、assurance、budget、stuck 检测和 review requirement。
 - `lib/event-store.mjs` 拥有 hash-chained `.workloop/events.jsonl` 权威日志。
@@ -143,7 +143,7 @@ Network、destructive、install-script 和 publish-shaped command 需要对应 g
 Hook recipe 必须显式指定 profile：
 
 ```sh
-workloop hooks --profile codex-safe --mode nudge
+workloop hooks --profile codex --mode nudge
 workloop hooks --profile claude --mode nudge
 ```
 

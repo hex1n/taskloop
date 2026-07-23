@@ -10,7 +10,7 @@ const files = [
   "tests/workloop-architecture.test.mjs",
 ];
 const required = [
-  "lib/application.mjs",
+  "lib/provider-provider-application.mjs",
   "lib/git-authority-provider.mjs",
   "lib/filesystem-authority-provider.mjs",
   "lib/task-engine.mjs",

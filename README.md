@@ -33,7 +33,7 @@ loop you run on it.
 ## Repository Map
 
 - `bin/workloop.mjs` is only the process entry.
-- `lib/application.mjs` is the single assembly layer for CLI verbs, hook
+- `lib/provider-application.mjs` is the single assembly layer for CLI verbs, hook
   dispatch, event commits, snapshots, projection, and reports.
 - Leaf modules in `lib/` may import only `lib/prims.mjs`; the architecture
   suite enforces that boundary.

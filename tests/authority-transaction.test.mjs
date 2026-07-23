@@ -198,9 +198,9 @@ test("unreleased acquire and release failures poison the process and preserve re
   assert.equal(unprovenClaimStat.first_claim_exists, true);
 });
 test("new Contract seam is activated only by the application assembly and stays a leaf", () => {
-  const application = fs.readFileSync(path.join(ROOT, "lib", "application.mjs"), "utf8");
+  const application = fs.readFileSync(path.join(ROOT, "lib", "provider-application.mjs"), "utf8");
   assert.match(application, /from "\.\/authority-transaction\.mjs"/);
-  assert.match(application, /CURRENT_AUTHORITY_RUNTIME = Object\.freeze\(\{ createLockManager, runAuthorityTransaction, evolveAllCurrentAuthority \}\)/);
+  assert.match(application, /RUNTIME = Object\.freeze\(\{ createLockManager, runAuthorityTransaction, evolveAllCurrentAuthority \}\)/);
   const seam = fs.readFileSync(path.join(ROOT, "lib", "authority-transaction.mjs"), "utf8");
   assert.deepEqual([...seam.matchAll(/from "([^"]+)"/g)].map((match) => match[1]), ["./prims.mjs"]);
   assert.doesNotMatch(seam, /spikes\/multi-root-authority|authority\.jsonl|\.workloop-root\.jsonl/);

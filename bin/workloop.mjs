@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 
 import process from "node:process";
-import { main } from "../lib/application.mjs";
+import { main } from "../lib/provider-application.mjs";
 
 process.exitCode = main();
