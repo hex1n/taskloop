@@ -1160,7 +1160,7 @@ test("[MAR-ADAPTER] public Hook process decodes host payload and routes target t
     claims: [fx],
     telemetryPath,
   }));
-  const invoke = (filePath) => spawnSync(process.execPath, [HOOK_CLI, "--profile", "codex-safe", "--context", contextFile], {
+  const invoke = (filePath) => spawnSync(process.execPath, [HOOK_CLI, "--profile", "codex", "--context", contextFile], {
     encoding: "utf8",
     input: JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.attachmentRoot, tool_name: "apply_patch", tool_input: { file_path: filePath } }),
     timeout: 5_000,
@@ -1241,7 +1241,7 @@ test("[MAR-ADAPTER] real Hook failures stay byte-exact nonblocking and never man
       controlContext: { gitCommonDir: claimed.controlRoot, homeRoot: path.join(claimed.root, "home") },
     },
   ];
-  for (const profile of ["claude", "codex-safe"]) {
+  for (const profile of ["claude", "codex"]) {
     for (const event of ["pre_tool_use", "post_tool_use", "post_tool_use_failure", "stop"]) {
       for (const context of contexts) {
         const result = runDefaultHook({ profile, event, ...context });
@@ -1254,7 +1254,7 @@ test("[MAR-ADAPTER] real Hook failures stay byte-exact nonblocking and never man
   }
   holder.kill("SIGKILL");
   await waitForExit(holder);
-  const clean = runDefaultHook({ profile: "codex-safe", event: "pre_tool_use", routingInput: routingInput(claimed), routingOptions: { staleMs: 10 } });
+  const clean = runDefaultHook({ profile: "codex", event: "pre_tool_use", routingInput: routingInput(claimed), routingOptions: { staleMs: 10 } });
   assert.equal(clean.routing_state, "claimed");
   assert.equal(clean.clean_evidence, true);
   assert.deepEqual(clean.wire, { stdout: "", stderr: "", exitCode: 0 });
