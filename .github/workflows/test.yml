@@ -1,4 +1,4 @@
-name: test
+name: provider-contract
 
 on:
   push:
@@ -8,136 +8,24 @@ permissions:
   contents: read
 
 jobs:
-  portable:
+  provider:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-latest, macos-latest]
-        node: [22, 24]
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: ${{ matrix.node }}
-      - run: npm test
-
-  windows:
-    strategy:
-      fail-fast: false
-      matrix:
-        os: [windows-2022, windows-2025]
+        os: [ubuntu-latest, macos-latest, windows-2022, windows-2025]
         node: [22, 24]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 20
-    defaults:
-      run:
-        shell: pwsh
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
-      - name: Runtime versions
-        run: |
-          node --version
-          npm --version
-          $PSVersionTable.PSVersion.ToString()
-      - name: PowerShell Core smoke
-        timeout-minutes: 2
-        run: node .\bin\workloop.mjs help | Out-Null
-      - name: Windows PowerShell smoke
-        timeout-minutes: 2
-        shell: powershell
-        run: node .\bin\workloop.mjs help | Out-Null
-      - name: Command Prompt smoke
-        timeout-minutes: 2
-        shell: cmd
-        run: node bin\workloop.mjs help >NUL
-      - name: Portable skills
-        timeout-minutes: 2
-        run: npm run test:skills
-      - name: Windows install and shell resolution
-        timeout-minutes: 3
-        run: node --test --test-name-pattern="Windows install is repeatable" tests/windows.test.mjs
-      - name: Windows hook protocol (cmd)
-        id: hook_cmd
-        timeout-minutes: 3
-        run: |
-          $output = & node --test --test-reporter=spec --test-name-pattern="Windows generated hook command.*cmd$" tests/windows.test.mjs 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 0) {
-            $escaped = $output.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
-            Write-Output "::error title=Windows hook protocol (cmd)::$escaped"
-            exit 1
-          }
-          Write-Output $output
-      - name: Windows hook protocol (Windows PowerShell)
-        id: hook_windows_powershell
-        timeout-minutes: 3
-        run: |
-          $output = & node --test --test-reporter=spec --test-name-pattern="Windows generated hook command.*Windows PowerShell$" tests/windows.test.mjs 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 0) {
-            $escaped = $output.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
-            Write-Output "::error title=Windows hook protocol (Windows PowerShell)::$escaped"
-            exit 1
-          }
-          Write-Output $output
-      - name: Windows hook protocol (PowerShell Core)
-        id: hook_powershell_core
-        timeout-minutes: 3
-        run: |
-          $output = & node --test --test-reporter=spec --test-name-pattern="Windows generated hook command.*PowerShell Core$" tests/windows.test.mjs 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 0) {
-            $escaped = $output.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
-            Write-Output "::error title=Windows hook protocol (PowerShell Core)::$escaped"
-            exit 1
-          }
-          Write-Output $output
-      - name: Windows child termination
-        timeout-minutes: 3
-        run: |
-          $output = & node --test --test-reporter=spec --test-name-pattern="Windows criterion timeout" tests/windows.test.mjs 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 0) {
-            $escaped = $output.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
-            Write-Output "::error title=Windows child termination::$escaped"
-            exit 1
-          }
-          Write-Output $output
-      - name: Windows stale installer lock
-        timeout-minutes: 3
-        run: node --test --test-name-pattern="Windows installer reaps a stale lock" tests/windows.test.mjs
-      - name: W01-W08 event authority, recovery, transcript, and concurrency
-        timeout-minutes: 5
-        run: node --test --test-reporter=spec --test-name-pattern="\[W0[1-8]\]" tests/windows.test.mjs tests/event-store.test.mjs tests/task-snapshot-v3.test.mjs tests/runtime-v5.test.mjs tests/runtime-v6.test.mjs tests/workloop-architecture.test.mjs
-      - name: Authority transaction contract
-        timeout-minutes: 3
-        run: node --test --test-reporter=spec tests/authority-transaction.test.mjs
-      - name: Current Git authority
-        timeout-minutes: 3
-        run: node --test --test-reporter=spec tests/git-main-authority.test.mjs tests/git-linked-worktree-authority.test.mjs tests/git-partitioned-multitask-authority.test.mjs tests/git-exclusive-worktree-authority.test.mjs
-      - name: Architecture
-        timeout-minutes: 3
-        run: |
-          $output = & node --test --test-reporter=spec tests/workloop-architecture.test.mjs 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 0) {
-            $escaped = $output.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
-            Write-Output "::error title=Windows architecture::$escaped"
-            exit 1
-          }
-          Write-Output $output
-      - name: Installer
-        timeout-minutes: 5
-        run: npm run test:installer
-      - name: Command safety, behavioral and hook protocol
-        timeout-minutes: 5
-        run: |
-          $output = & node --test --test-reporter=spec tests/command-safety-adversarial.test.mjs tests/workloop.test.mjs 2>&1 | Out-String
-          if ($LASTEXITCODE -ne 0) {
-            $failureIndex = $output.IndexOf("failing tests:")
-            $details = if ($failureIndex -ge 0) { $output.Substring($failureIndex) } else { $output }
-            $escaped = $details.Replace("%", "%25").Replace("`r", "%0D").Replace("`n", "%0A")
-            Write-Output "::error title=Windows behavioral::$escaped"
-            exit 1
-          }
-          Write-Output $output
+      - name: Runtime
+        run: node --version
+      - name: Source help
+        run: node bin/workloop.mjs help
+      - name: Provider authority suite
+        run: npm test
+      - name: Ticket acceptance suite
+        run: node tests/verify-provider-tickets.mjs

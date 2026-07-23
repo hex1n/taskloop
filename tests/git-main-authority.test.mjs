@@ -357,5 +357,6 @@ test("current Git provider is a new-Contract leaf and old authority is never an 
   assert.match(engine, /function evolveCurrentAuthority/);
   assert.match(engine, /function assertCurrentAuthorityProjection/);
   const workflow = fs.readFileSync(path.join(ROOT, ".github", "workflows", "test.yml"), "utf8");
-  assert.match(workflow, /Current Git authority[\s\S]*tests\/git-main-authority\.test\.mjs/);
+  assert.match(workflow, /Provider authority suite[\s\S]*npm test/);
+  assert.match(workflow, /Ticket acceptance suite[\s\S]*verify-provider-tickets\.mjs/);
 });

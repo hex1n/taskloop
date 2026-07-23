@@ -71,52 +71,6 @@ function exists(file) {
   }
 }
 
-function inspectSourceTaskState(repo, fsOps = fs) {
-  const eventStore = path.join(repo, ".workloop", "events.jsonl");
-  if (exists(eventStore)) {
-    let current = null;
-    const bytes = fsOps.readFileSync(eventStore, "utf8");
-    if (bytes && !bytes.endsWith("\n")) throw new Error(`cannot verify active task contract from torn authority: ${eventStore}`);
-    for (const line of bytes.trim().split("\n").filter(Boolean)) {
-      let record;
-      try { record = JSON.parse(line); }
-      catch { throw new Error(`cannot verify active task contract from invalid authority: ${eventStore}`); }
-      if (!Array.isArray(record?.events)) throw new Error(`cannot verify active task contract from malformed authority: ${eventStore}`);
-      for (const event of record.events) {
-        if (event.kind === "task_opened") current = {
-          task_id: event.task_id,
-          runtime_contract: event.payload_version >= 2 && new Set([6, 7]).has(event.payload?.runtime_contract) ? event.payload.runtime_contract : 5,
-          lifecycle: "active",
-        };
-        else if (current && event.task_id === current.task_id && event.kind === "task_suspended") current.lifecycle = "suspended";
-        else if (current && event.task_id === current.task_id && ["task_resumed", "task_joined"].includes(event.kind)) current.lifecycle = "active";
-        else if (current && event.task_id === current.task_id && event.kind === "task_terminal") current.lifecycle = "terminal";
-      }
-    }
-    return current;
-  }
-  const snapshot = path.join(repo, ".workloop", "task.json");
-  if (!exists(snapshot)) return null;
-  let stored;
-  try { stored = JSON.parse(fsOps.readFileSync(snapshot, "utf8")); }
-  catch { throw new Error(`cannot verify active task contract from invalid snapshot: ${snapshot}`); }
-  const projection = stored?.projection;
-  if (!isPlainObject(projection) || !isPlainObject(projection.lifecycle)) throw new Error(`cannot verify active task contract from malformed snapshot: ${snapshot}`);
-  return {
-    task_id: projection.task_id ?? null,
-    runtime_contract: new Set([6, 7]).has(projection.runtime_contract) ? projection.runtime_contract : 5,
-    lifecycle: projection.lifecycle.state,
-  };
-}
-
-function assertSourceActivationCompatible(repo, fsOps = fs) {
-  const task = inspectSourceTaskState(repo, fsOps);
-  if (task?.runtime_contract < RUNTIME_CONTRACT && task.lifecycle !== "terminal") {
-    throw new Error(`active Contract ${task.runtime_contract} task blocks Contract ${RUNTIME_CONTRACT} activation; finish or abandon it with the compatible runtime first`);
-  }
-  return task;
-}
-
 function walkFiles(root) {
   const files = [];
   if (!exists(root)) return files;
@@ -757,6 +711,48 @@ function codexHookCommands(config, text, event) {
   return commands;
 }
 
+function codexWorkloopHandlers(home, { strict = false } = {}) {
+  const handlers = [];
+  for (const config of [path.join(home, ".codex", "hooks.json"), path.join(home, ".codex", "config.toml")]) {
+    let text;
+    try {
+      text = fs.readFileSync(config, "utf8");
+    } catch (error) {
+      if (error?.code !== "ENOENT" && !strict) plan("warning", `cannot inspect Codex Hook configuration ${config}: ${error?.message ?? error}; preserved ${config}`);
+      if (error?.code !== "ENOENT" && strict) throw new Error(`cannot inspect Codex Hook configuration ${config}: ${error?.message ?? error}`);
+      continue;
+    }
+    try {
+      for (const event of CODEX_HOOK_EVENTS) {
+        for (const handler of codexHookCommands(config, text, event)) {
+          if (/workloop(?:\.mjs)?/i.test(handler.command)) handlers.push({ ...handler, config, event });
+        }
+      }
+    } catch (error) {
+      if (strict && /workloop(?:\.mjs)?/i.test(text)) throw new Error(`cannot activate provider Contract while Codex Hook configuration is unparseable: ${config}; repair the host-owned configuration manually`);
+      if (!strict) plan("warning", `cannot inspect Codex Hook configuration ${config}: ${error?.message ?? error}; preserved ${config}`);
+    }
+  }
+  return handlers;
+}
+
+function hasCodexProfile(command) {
+  const profiles = [...String(command).matchAll(/(?:^|\s)--profile(?:\s+|=)(?:"([^"]*)"|'([^']*)'|([^\s]+))/g)]
+    .map((match) => match[1] ?? match[2] ?? match[3]);
+  return /(?:^|\s)hook(?=\s|$)/.test(command) && profiles.length === 1 && profiles[0] === "codex";
+}
+
+function assertCodexHookActivationReady(home) {
+  for (const handler of codexWorkloopHandlers(home, { strict: true })) {
+    if (!hasCodexProfile(handler.command)) {
+      throw new Error(
+        `cannot activate provider Contract: Codex ${handler.event} workloop hook in ${handler.config} is not --profile codex; ` +
+        "update the host-owned Hook configuration manually before activation",
+      );
+    }
+  }
+}
+
 function inspectHookEvent({ host, event, handlers, configuredIn, expectedProfile }) {
   const contract = HOOK_EVENT_CONTRACTS[event];
   const locations = [...new Set((handlers.length ? handlers.map((handler) => handler.config) : configuredIn))].join(", ");
@@ -769,8 +765,8 @@ function inspectHookEvent({ host, event, handlers, configuredIn, expectedProfile
     plan("warning", `${host} workloop ${event} hook is configured more than once in ${locations}; keep exactly one generated handler; configuration preserved`);
     return;
   }
-  const profilePattern = new RegExp(`\\bhook\\s+--profile\\s+${expectedProfile}\\b`);
-  if (!handlers.every((handler) => profilePattern.test(handler.command))) {
+  const profileMatches = expectedProfile === "codex" ? hasCodexProfile : (command) => new RegExp(`(?:^|\\s)--profile(?:\\s+|=)["']?${expectedProfile}["']?(?=\\s|$)`).test(command);
+  if (!handlers.every((handler) => profileMatches(handler.command))) {
     plan("warning", `incompatible ${host} workloop ${event} hook found in ${locations}; ${recipe}`);
     return;
   }
@@ -787,26 +783,7 @@ function inspectHookEvent({ host, event, handlers, configuredIn, expectedProfile
 }
 
 function inspectCodexHookProfiles(home) {
-  const workloopHandlers = [];
-  for (const config of [path.join(home, ".codex", "hooks.json"), path.join(home, ".codex", "config.toml")]) {
-    let text;
-    try {
-      text = fs.readFileSync(config, "utf8");
-    } catch (error) {
-      if (error?.code !== "ENOENT") plan("warning", `cannot inspect Codex Hook configuration ${config}: ${error?.message ?? error}; preserved ${config}`);
-      continue;
-    }
-    let commands;
-    try {
-    commands = CODEX_HOOK_EVENTS.flatMap((event) => codexHookCommands(config, text, event)
-        .filter((handler) => /workloop(?:\.mjs)?/i.test(handler.command))
-        .map((handler) => ({ ...handler, config, event })));
-    } catch (error) {
-      plan("warning", `cannot inspect Codex Hook configuration ${config}: ${error?.message ?? error}; preserved ${config}`);
-      continue;
-    }
-    workloopHandlers.push(...commands);
-  }
+  const workloopHandlers = codexWorkloopHandlers(home);
   if (!workloopHandlers.length) return;
   const configuredIn = workloopHandlers.map((handler) => handler.config);
   for (const event of CODEX_HOOK_EVENTS) {
@@ -838,35 +815,9 @@ function inspectClaudeHookProfile(home) {
   }
 }
 
-function readReleaseManifest(home) {
-  try {
-    const parsed = JSON.parse(fs.readFileSync(path.join(home, "bin", ".workloop-active-release.json"), "utf8"));
-    return isPlainObject(parsed) ? parsed : null;
-  } catch {
-    return null;
-  }
-}
-
-function compatibilityRuntimePins(home) {
-  const manifest = readReleaseManifest(home);
-  const pins = {};
-  for (const contract of [5, 6]) {
-    const key = `contract_${contract}`;
-    const candidate = manifest?.runtime_contract === contract
-      ? manifest.runtime_digest
-      : manifest?.compatibility_runtimes?.[key] ?? null;
-    if (candidate === null || candidate === undefined) { pins[key] = null; continue; }
-    if (typeof candidate !== "string" || !RUNTIME_HASH_SHAPE.test(candidate)) throw new Error(`invalid Contract ${contract} compatibility runtime pin`);
-    const target = path.join(home, "bin", ".workloop-runtime", candidate);
-    if (!installedRuntimeVersionProvable(target, candidate)) throw new Error(`Contract ${contract} compatibility runtime is missing or corrupt: ${target}`);
-    pins[key] = candidate;
-  }
-  return pins;
-}
-
-function pruneRuntimes(runtimeRoot, activeHash, dry, preservedHashes = []) {
+function pruneRuntimes(runtimeRoot, activeHash, dry) {
   if (!exists(runtimeRoot)) return;
-  const preserved = new Set([activeHash, ...preservedHashes].filter(Boolean));
+  const preserved = new Set([activeHash]);
   for (const name of fs.readdirSync(runtimeRoot).sort()) {
     if (preserved.has(name)) continue;
     const target = path.join(runtimeRoot, name);
@@ -926,7 +877,7 @@ function installWorkloopRuntimeUnlocked(repo, home, dry, { activate = true } = {
     if (activate) {
       // Activation is last, so every process sees one complete pinned runtime.
       activateRuntimeShims(home, hash, dry);
-      pruneRuntimes(runtimeRoot, hash, dry, Object.values(compatibilityRuntimePins(home)));
+      pruneRuntimes(runtimeRoot, hash, dry);
     }
     return { hash, versionRoot };
   };
@@ -935,21 +886,18 @@ function installWorkloopRuntimeUnlocked(repo, home, dry, { activate = true } = {
 
 export function installWorkloopRuntime(repo, home, dry = false) {
   ACTIONS.length = 0;
-  const install = () => installWorkloopRuntimeUnlocked(repo, home, dry);
+  const install = () => {
+    assertCodexHookActivationReady(home);
+    return installWorkloopRuntimeUnlocked(repo, home, dry);
+  };
   return dry ? install() : withInstallLock(home, install);
 }
 
 function readManagedSkills(file) {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (parsed?.version === 1 && Array.isArray(parsed.skills)) {
-      return {
-        runtimes: { ".claude": {}, ".codex": {} },
-        legacyNames: new Set(parsed.skills.filter((name) => /^[a-z0-9][a-z0-9-]*$/.test(name))),
-      };
-    }
     if (parsed?.version !== 2 || !parsed.runtimes || typeof parsed.runtimes !== "object") {
-      return { runtimes: { ".claude": {}, ".codex": {} }, legacyNames: new Set() };
+      return { runtimes: { ".claude": {}, ".codex": {} } };
     }
     const runtimes = {};
     for (const runtime of [".claude", ".codex"]) {
@@ -962,9 +910,9 @@ function readManagedSkills(file) {
         }
       }
     }
-    return { runtimes, legacyNames: new Set() };
+    return { runtimes };
   } catch {
-    return { runtimes: { ".claude": {}, ".codex": {} }, legacyNames: new Set() };
+    return { runtimes: { ".claude": {}, ".codex": {} } };
   }
 }
 
@@ -980,26 +928,6 @@ function managedSkillActivationTargets(repo, home) {
     for (const name of [...names].sort()) targets.push(path.join(root, name));
   }
   return targets;
-}
-
-// Byte-exact source trees from the last asdf-owned core at
-// 9c6dbdb957b530997c17a80bd4d2bdf3d3c02fd8, plus the unpublished name-only
-// workloop installer used during this extraction. They permit a one-time safe
-// adoption without treating an arbitrary same-name directory as workloop-owned.
-const LEGACY_CORE_DIGESTS = {
-  "loop-core": new Set([
-    "240b0483fc292a65f999eb598d12e48903fb4c3a50b77a0e3f2cd42dc5701e06",
-    "60e4890b035aeb597a3647ee012c1fd4cd7272804c9d2aa00ca568decc6ca47e",
-  ]),
-  workloop: new Set([
-    "3dcb2d46005915b1ccd4aa41d6de8b5fb365e9527e4d6da1930707be5ea46281",
-    "7468e5f0211b437157e0716e09cfafd1e3015a50f8030c5c5d0ef46a2fa59a4e",
-  ]),
-};
-
-export function legacySkillCanBeAdopted(skill, actualDigest, legacyNamed, currentDigest) {
-  if (LEGACY_CORE_DIGESTS[skill]?.has(actualDigest)) return true;
-  return Boolean(legacyNamed && actualDigest && actualDigest === currentDigest);
 }
 
 function installWorkloopAssetsUnlocked(repo, home, dry) {
@@ -1029,12 +957,8 @@ function installWorkloopAssetsUnlocked(repo, home, dry) {
       const expectedPrevious = groupPrevious[skill];
       if (pathPresent(target)) {
         if (!expectedPrevious) {
-          const actual = managedTreeDigest(target);
-          if (!legacySkillCanBeAdopted(skill, actual, previousState.legacyNames.has(skill), sourceDigests[skill])) {
-            plan("error", `${target} exists but is not proven workloop-owned; preserve it or remove it explicitly`);
-            continue;
-          }
-          plan("ok", `${target} (adopt byte-exact legacy workloop core)`);
+          plan("error", `${target} exists but is not proven workloop-owned; preserve it or remove it explicitly`);
+          continue;
         } else {
           const actual = managedTreeDigest(target);
           if (actual !== expectedPrevious) {
@@ -1103,13 +1027,10 @@ const TREE_DIGEST_SHAPE = /^[0-9a-f]{64}$/;
 const SKILL_NAME_SHAPE = /^[a-z0-9][a-z0-9-]*$/;
 const JOURNAL_STEP_KEYS = "manifest_committed,runtime_staged,shim_activated,skills_activated";
 const CONTROL_FILE_SHAPES = {
-  ".workloop-managed-skills.json": (parsed) =>
-    (parsed?.version === 1 && Array.isArray(parsed.skills)
-      && parsed.skills.every((name) => typeof name === "string" && SKILL_NAME_SHAPE.test(name)))
-    || (parsed?.version === 2 && isPlainObject(parsed.runtimes)
-      && Object.keys(parsed.runtimes).sort().join(",") === ".claude,.codex"
-      && Object.values(parsed.runtimes).every((skills) => isPlainObject(skills)
-        && Object.entries(skills).every(([name, digest]) => SKILL_NAME_SHAPE.test(name) && typeof digest === "string" && TREE_DIGEST_SHAPE.test(digest)))),
+  ".workloop-managed-skills.json": (parsed) => parsed?.version === 2 && isPlainObject(parsed.runtimes)
+    && Object.keys(parsed.runtimes).sort().join(",") === ".claude,.codex"
+    && Object.values(parsed.runtimes).every((skills) => isPlainObject(skills)
+      && Object.entries(skills).every(([name, digest]) => SKILL_NAME_SHAPE.test(name) && typeof digest === "string" && TREE_DIGEST_SHAPE.test(digest))),
   ".workloop-active-release.json": (parsed) => isPlainObject(parsed)
     && parsed.release_manifest_version === 3
     && typeof parsed.release_id === "string" && RUNTIME_HASH_SHAPE.test(parsed.release_id)
@@ -1283,6 +1204,7 @@ export function installWorkloopAssets(repo, home, dry = false) {
 export function installWorkloop(repo, home, dry = false) {
   ACTIONS.length = 0;
   const install = () => {
+    assertCodexHookActivationReady(home);
     const runtime = installWorkloopRuntimeUnlocked(repo, home, dry, { activate: false });
     const releaseId = runtime.hash;
     const journal = path.join(home, "bin", ".workloop-activation-journal.json");
@@ -1451,7 +1373,7 @@ export function invokedAsScript(moduleUrl) {
   return resolve(entry) === resolve(fileURLToPath(moduleUrl));
 }
 
-export { assertSourceActivationCompatible, inspectSourceTaskState };
+export { assertCodexHookActivationReady };
 
 if (invokedAsScript(import.meta.url)) {
   process.exit(main());

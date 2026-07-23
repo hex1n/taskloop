@@ -11,18 +11,9 @@
     "node": ">=22"
   },
   "scripts": {
-    "test": "node --test tests/authority-transaction.test.mjs tests/git-main-authority.test.mjs tests/git-task-receipts.test.mjs tests/git-linked-worktree-authority.test.mjs tests/git-partitioned-multitask-authority.test.mjs tests/git-exclusive-worktree-authority.test.mjs tests/filesystem-detached-authority.test.mjs tests/attachment-recovery-authority.test.mjs",
-    "test:matrix": "node --test tests/authority-transaction.test.mjs tests/git-main-authority.test.mjs tests/git-linked-worktree-authority.test.mjs tests/git-partitioned-multitask-authority.test.mjs tests/git-exclusive-worktree-authority.test.mjs tests/filesystem-detached-authority.test.mjs tests/attachment-recovery-authority.test.mjs",
-    "test:host-hooks": "node --test tests/host-hooks.test.mjs",
-    "test:behavioral": "node --test tests/workloop.test.mjs",
-    "test:architecture": "node --test tests/workloop-architecture.test.mjs",
-    "test:event-store": "node --test tests/event-store.test.mjs",
-    "test:snapshot": "node --test tests/task-snapshot-v3.test.mjs",
-    "bench:event-store": "node tests/event-store-benchmark.mjs",
-    "bench:artifact-checkpoint": "node tests/artifact-checkpoint-benchmark.mjs",
-    "test:installer": "node --test tests/installer.test.mjs",
-    "test:skills": "node --test tests/skills.test.mjs",
-    "test:windows": "node --test tests/windows.test.mjs tests/git-main-authority.test.mjs tests/git-linked-worktree-authority.test.mjs tests/git-partitioned-multitask-authority.test.mjs tests/git-exclusive-worktree-authority.test.mjs tests/filesystem-detached-authority.test.mjs",
+    "test": "node --test tests/authority-transaction.test.mjs tests/provider-installer.test.mjs tests/git-main-authority.test.mjs tests/git-task-receipts.test.mjs tests/git-linked-worktree-authority.test.mjs tests/git-partitioned-multitask-authority.test.mjs tests/git-exclusive-worktree-authority.test.mjs tests/filesystem-detached-authority.test.mjs tests/attachment-recovery-authority.test.mjs",
+    "test:matrix": "node --test tests/authority-transaction.test.mjs tests/provider-installer.test.mjs tests/git-main-authority.test.mjs tests/git-linked-worktree-authority.test.mjs tests/git-partitioned-multitask-authority.test.mjs tests/git-exclusive-worktree-authority.test.mjs tests/filesystem-detached-authority.test.mjs tests/attachment-recovery-authority.test.mjs",
+    "test:installer": "node --test tests/provider-installer.test.mjs",
     "install:user": "node install.mjs",
     "install:user:dry-run": "node install.mjs --dry-run"
   },

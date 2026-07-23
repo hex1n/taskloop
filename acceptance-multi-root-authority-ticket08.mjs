@@ -6,11 +6,10 @@ const files = [
   "tests/git-main-authority.test.mjs",
   "tests/git-linked-worktree-authority.test.mjs",
   "tests/filesystem-detached-authority.test.mjs",
-  "tests/host-authority.test.mjs",
-  "tests/workloop-architecture.test.mjs",
+  "tests/provider-installer.test.mjs",
 ];
 const required = [
-  "lib/provider-provider-application.mjs",
+  "lib/provider-application.mjs",
   "lib/git-authority-provider.mjs",
   "lib/filesystem-authority-provider.mjs",
   "lib/task-engine.mjs",

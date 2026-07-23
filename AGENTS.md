@@ -2,56 +2,55 @@
 
 ## Start and verify
 
-This repository is a dependency-free Node.js CLI plus the portable loop kernel skills (`skills/loop-core`, `skills/workloop`, `skills/judgmentloop`, `skills/meta-loop`). Run `npm test` for the behavioral, architecture, hook-protocol, installer, and skill-closure suites. Run `node bin/workloop.mjs help` to exercise the source entry directly.
+This repository ships the provider-authority Workloop runtime. Run `npm test`
+before handoff, and `node bin/workloop.mjs help` to inspect the public Contract.
 
-Windows compatibility is gated on fixed GitHub-hosted Windows versions with separately bounded suite groups; shell/install/path/lock/timeout coverage lives in `tests/windows.test.mjs` and `.github/workflows/test.yml`.
+## Current Contract
 
-## Conventions
+- `bin/workloop.mjs` is only the process entry.
+- `lib/provider-application.mjs` is the only public application assembly.
+- Public verbs are listed by `help`; do not add command aliases or legacy
+  runtime routes.
+- Git and detached-filesystem providers own replayable authority journals;
+  locators are attachments, never authority.
+- Task-scoped Git receipt operations stage and commit only the selected task's
+  paths. Concurrent disjoint tasks may share an attachment; overlapping claims
+  are rejected.
+- Every filesystem root is explicit. It may be outside Git and must not overlap
+  another detached authority.
 
-- `bin/workloop.mjs` is only the process entry; `lib/provider-application.mjs` is the single assembly module.
-- Leaf modules may import only `lib/prims.mjs`, never sibling leaf modules. The architecture suite enforces this dependency direction.
-- Lifecycle state changes belong in `lib/task-engine.mjs`. Critical task-state writes fail loudly; outcome projection and untracked-work telemetry degrade open.
-- Tests assert public CLI/hook output and module interfaces. Keep byte-exact hook protocol compatibility unless a deliberate interface change is documented.
-- Stop self-suspension is part of the hook contract: `out_of_budget` at budget exhaustion, `stuck` on three identical failure signatures or on seven revision-stagnant unsatisfied attempts (hosts force-release pure spinning around nine metered stops and reset their counters on intervening writes; probed live 2026-07-13).
-- `verify --record` persists a CLI observation with `cli_verify` provenance and the same auto-suspension semantics as a Stop observation (episode stays open; lifecycle transitions it triggers carry source `cli`); it exists because single-session continuous work otherwise produces no observations at all (design in `docs/plans/2026-07-19-cli-recorded-observation.md`).
-- Host Hook recipes require `hook --profile` and default to host-authoritative `--mode nudge`: Pre records intent/deviations, Post records receipts, and Stop is release-only on every profile. Only explicit `--mode deny` lets `claude` use hard Stop within the runtime inline budget or lets Pre return execution denials; Codex Stop remains release-only. The capability and recipe timeout contract lives in `lib/host-hooks.mjs`.
-- External criterion execution for `open`, Stop, `verify`, `verify --record`, and `achieve` is outside `.workloop/.task.lock` under the independent deadline-bearing `.criterion.lock`; the one absolute operation deadline covers preparation, execution, snapshots, and cleanup, and timeout kills the whole criterion process tree. Prepare/runner/commit compare full repository-content fingerprints (ignored files included, `.git`/`.workloop` excluded); hashing stays outside `.task.lock`, followed by a bounded membership/stat/recent-content revalidation inside the commit lock. Stale observations never count rounds or close; content changes still record side-effect evidence on the same active/suspended task so artifact revision and review freshness remain sound even across a concurrent suspend. Owned directory locks publish a complete claim atomically, with age-gated exclusive-copy fallback when hard links are unavailable. Host recipe timeout is defense-in-depth, never the correctness boundary (implemented in `lib/provider-application.mjs`/`lib/criterion.mjs`/`lib/prims.mjs`/`lib/task-store.mjs`, 2026-07-22).
-- Out-of-budget `resume` transition events require a caller-captured integer `atEpochMs`; `lib/provider-application.mjs` captures it once so wall-clock decisions never fall back to the second-resolution persisted timestamp.
-- Runtime contract 5 uses stable, versionless core artifact names; `migrate-artifact-names --granted-by user` adopts legacy names and fails closed on dual-name authority. The evidence ledger is likewise versionless, versioned by each row's `schema_version` rather than the filename; it has no migrator, so a legacy `*-v1` ledger is rebuilt empty rather than adopted.
-- A decider must not emit an event its own reducer would reject. `V3_DECIDERS.open` runs `V3_REDUCERS.task_opened` against empty state before returning, because `decide()` precedes persistence: without it, an `open` whose criterion observed indeterminate — or which fails any other `createTask` check, such as the default policy's unsatisfied-at-open requirement — committed a well-formed `task_opened` that replays forever, so `status`, `audit` and Stop all threw while `open` and `abandon` could not escape it, and the only exit was deleting the ledger by hand (fixed 2026-07-21; `docs/issues/2026-07-20-indeterminate-open-wedges-repo.md`). Call the reducer rather than restating its checks, or the two drift.
-- Event schemas are deliberately defined three times — payload field lists (`lib/prims.mjs` `V3_EVENT_PAYLOAD_FIELDS`), persisted-record contracts (`lib/event-store.mjs` `NESTED_CONTRACTS`/`PAYLOAD_CONTRACTS`), and in-memory projection validators (`lib/task-engine.mjs` `assertV3*`) — as defense in depth: the record layer rejects bytes the reducer never sees. A schema change updates all three together. Validation messages are frozen by the runtime-contract-5 fixture; diagnostics ride as `error.field`, never as message changes.
-- Untracked nudge/deny messages carry criterion-sourcing discipline and route to the workloop skill by name; keep them host-neutral (no host-specific skill invocation syntax).
-- Grant-gated command denies (destructive, network, install, publish) are actionable: after the tested `... grant` fragment they name the `workloop amend` flag that lifts them, in the same host-neutral workloop-verb style as the `run workloop join` deny (reworded 2026-07-19 after a scratch-fixture cleanup deny left the agent without a next step).
-- Destructive authority is two-tier: `--destructive-allowed` (full, sets `envelope.destructive`) or `--destructive-scope <root>` (a grant of literal subtree roots — never globs, because a single-star glob can match a directory while missing its grandchildren under recursive rm). The scoped gate covers only rm with enumerable literal targets; roots and targets both canonicalize through `canonicalWriteTarget` (symlink-resolved, fail-closed on variables/globs/`~`). In-scope use is attributed cleanup — marker `<command:destructive_scoped>` plus `<destructive-scoped:target>` entries instead of `<command:destructive>`/`<command>` — so the machine floor does not rise (`scopedDestructiveFailure`/`scopedDestructiveAttribution` in `lib/supervision.mjs`, added 2026-07-19).
-- Contract 6's authorize-write deny path emits no event, so legacy enforcement denies persist as `write_denied` evidence. Contract 7 records `operation_intent_recorded` in authority and `policy_deviation` telemetry; `ledger --json` exposes `queries.policy_deviations` and joins each row to the next grant. Grow the grant vocabulary from that evidence, not speculatively.
-- `ledger --json` also exposes `queries.terminal_write_sets` — each terminal task's outcome, close time, and non-synthetic write set — so the meta-loop review can join landed work against repository history after close (the ledger itself stops observing at the terminal event). Rows record observations, never survival verdicts; landing-commit exclusion and supersede-versus-regression interpretation stay attended in the skill (added 2026-07-19; spike in `docs/research/2026-07-19-loops-to-graphs-vs-taskloop.md`).
-- `ledger --json` exposes `queries.reviews` — each recorded review's level, reviewer, and blocking/advisory finding counts — so the meta-loop review can mine advisory clusters; advisory findings are persisted on every review event but no other query surfaced them, leaving them invisible to the ledger-only reading contract (added 2026-07-19). Counts are observations; interpreting a cluster stays attended.
-- Review receipts live in version control under `docs/reviews/`, one file per review named by its `review_id`: the review event's counts say how much was found, only the receipt says what — kind-level advisory mining is impossible without them (gap found by the first sanctioned meta-loop run, 2026-07-20). The owner session transcribes the reviewer's report at record time; a recorded review with no receipt is a coverage gap the meta-loop review reports.
-- Write policy is **target-scoped**: judged by the repository containing the operation's resolved target, not the hook's launch repo (`externalTargetDecision`/`gitExternalDelegation` share `externalRepoActiveTask`, `lib/supervision.mjs`; wired for the foreign and owner paths alike). A write or non-read-only `git -C` aimed outside this repo is decided by that repo's own workloop state — control state always protected, an active-task envelope intersection a conflict there. `push`, destructive git, and the host-level risk floors never delegate (workloop's one git classifier decides `git clean` is destructive; do not add a second), and a linked worktree is never external. The owner keeps in-repo trust: a shell writer outside the envelope is allowed and an unresolvable owner target is not fail-closed — that asymmetry, and same-repo multi-task parallelism (a worktree job), are intentional.
-- Foreign-session denies use three distinct, host-neutral categories — protected resource, unresolvable target, host-level risk floor — and read as a scope/authorization question, never a bare prohibition; the `WORKLOOP_SESSION_ID conflicts with the host hook session id` deny is host-neutral for the same reason (it fires under the Claude profile too). Tests match reason fragments, so a reword is a deliberate interface change per the hook-compatibility rule above.
-- The taskloop→workloop rename is a hard cutover with no compatibility layer: one name for the state directory (`.workloop/`), the session-identity env vars, and the `WORKLOOP_CRITERION:` stdout prefix. No dual read, no legacy fallback, no migration verb — a pre-rename repo or host is migrated by hand, once, and a stale `.taskloop/` simply reads as no task (decided 2026-07-20; the rename plan's transition-period design was built and then removed unshipped). That hand migration is where the rename actually drew blood, four times, always silently: the product name is also the state directory, the `~/bin` managed-skills manifest, a sandbox writable root, and each host's on-disk hook command line — all outside version control, none of them in any diff. Two rules earned there: move contents with per-entry fail-closed collision checks, because the runtime creates its state directory on demand and `mv .taskloop .workloop` then nests instead of renaming; and never confirm "nothing references this" with a check that can truncate — a `grep | head` that filled up with transcript noise is exactly how the live Codex hook config got deleted out from under its shim (`docs/plans/2026-07-20-rename-taskloop-to-workloop.md` risk section). Hook recipes themselves need no rename: `buildHookRecipe` takes the command as a parameter and `lib/provider-application.mjs` derives it from `process.argv[1]`.
-- Keep `skills/*/SKILL.md` task-facing. Shared task/envelope/criterion semantics belong in `skills/loop-core`; relative skill links must resolve inside this repository.
-- Portable skills use Markdown and standard-library helpers only. Do not leak source-project names, fields, prompts, session ids, or local paths into them.
+## Hooks and installation
 
-## Direction and danger
+- The host exclusively decides whether a tool executes. Default `observe` and
+  `nudge` Hooks only observe/record and must fail open.
+- Only explicit `deny` PreToolUse may return a rejection. Codex Stop always
+  releases.
+- Only `claude` and `codex` Hook profiles exist. Do not add `codex-safe`,
+  profile aliases, or a compatibility fallback.
+- A stale or unsupported `observe`/`nudge` invocation is released with a
+  diagnostic and no recording; it is not an accepted profile. `deny` rejects
+  it. This preserves the default non-blocking host contract during manual
+  configuration repair.
+- Host Hook files are owner-managed. The installer must never rewrite them.
+  It must refuse activation before replacing a shim when it detects a Workloop
+  Codex Hook that is not `--profile codex`.
+- The installer does not adopt legacy runtime pins or unproven skill trees.
 
-The runtime is the work certifier: the host exclusively grants tool execution authority, while Workloop observes intent and receipts, reconciles landed artifacts, adjudicates fresh criteria, records auditable deviations, and may refuse terminal certification. The default Hook mode never blocks tool execution or Stop; enforcement is an explicit `deny` opt-in. The bundled skills select and structure loop behavior. Schedulers that trigger another round remain outside this repository.
+## State and recovery
 
-The loop kernel contains the runtime and skills that co-author a core runtime contract: `loop-core`, `workloop`, `judgmentloop`, and `meta-loop`. Skills that only consume an established contract live in their own repositories and compose through `loop-core`; keep the core skill texts free of references to any specific external skill or tool.
+- Provider authority is canonical; outcome shards in `WORKLOOP_AUTHORITY_HOME`
+  are best-effort caches and never an input to adjudication.
+- Earlier `.workloop` task artifacts are opaque. Never parse or migrate them.
+  `archive-incompatible-state` may only copy recognized files with both explicit
+  user provenance and a reason; it never replaces or deletes the source.
+- Attachment move, copy/collision, reattach, cleanup, and identity fork paths
+  must preserve durable truth and use idempotent command provenance.
 
-In `observe`/`nudge`, unreadable Hook state fails open and is never allowed to block host execution or Stop. In explicit `deny`, an armed Stop gate refuses to adjudicate — not release — when task state is unreadable, so incompatible state must be handled with `archive-incompatible-state` and explicit user provenance. Never self-sign that provenance.
+## Scope discipline
 
-`node install.mjs` writes a versioned runtime, stable shim, and digest-proven managed skill copies under the current user's home; use a temporary `WORKLOOP_INSTALL_HOME` when testing installation behavior manually. It must preserve unowned, locally modified, or externally taken-over skill trees, including when Claude and Codex skill roots alias the same directory. Never hand-edit generated files below `~/bin/.workloop-runtime/`; modifying a managed skill intentionally releases it from automatic replacement/pruning.
-
-Both scripts gate `main()` on `invokedAsScript` (`install.mjs`), which compares resolved real paths. Comparing `import.meta.url` to `pathToFileURL(process.argv[1])` — the idiomatic form — is wrong here: module resolution hands `import.meta.url` the symlink-resolved path while argv keeps what the caller typed, so on macOS every `/var` and `/tmp` path made the guard false and the installer exited 0 having done nothing (found 2026-07-21 by the packaging test, whose `os.tmpdir()` is exactly such a path).
-
-`node uninstall.mjs [--dry-run] [--purge-ledger]` is the manifest read backwards, and it shares `install.mjs`'s primitives rather than reimplementing them. It deletes only what it can prove it installed: a skill tree whose digest still matches the manifest, a shim matching the generated shape, a runtime version whose content hash still equals its directory name, and a control file that still parses as the shape workloop writes. An edited tree, an externally taken-over tree, a hand-written shim, a tree with conflicting digests across aliased skill roots, or foreign content wearing a workloop name is preserved and reported — unprovable means preserved, because a leftover directory costs one manual `rm` while a wrong delete costs unrecoverable work. `~/.workloop` is the owner's cross-repository outcome ledger, not an install artifact, so it survives unless `--purge-ledger` says otherwise. Host bindings (Claude `settings.json`, Codex `hooks.json`/`config.toml`) are owner-managed: uninstall reports that they still reference workloop instead of editing files it never wrote.
-
-Distributing a *new* managed skill blocks the release on any home that already holds a same-named tree: `install.mjs:792` returns before `activateRuntimeShims`, so the shim silently keeps serving the old runtime while the journal reads `needs_manual_intervention`. `LEGACY_CORE_DIGESTS` (`install.mjs:676`) grants one-time adoption to `loop-core` and `workloop` only; every other name needs the owner to remove or rename the tree first (found releasing `meta-loop` into the kernel, 2026-07-17). The taskloop→workloop rename hit this exact block live, because the managed-skills manifest is named after the product: renaming `~/bin/.taskloop-managed-skills.json` to `.workloop-managed-skills.json` before installing is the one-time manual step that lets the existing trees be recognized as owned.
-
-## Docs gaps
-
-Re-derived something a fresh contributor should have known? Add one line here with the fact and where it was found. Once an entry stabilizes, promote it into the section where a fresh reader would look for it.
-
-- Non-shell tools (a Codex apply_patch, an Edit) also deliver `command` fields; shell-only semantics (identity-assignment parsing, session-injection rewrite) must guard on the tool first, or they crash the hook / degrade the task owner to "cli" and disarm foreign-session policy (found via a live Codex failure, 2026-07-18; diagnosis in `docs/plans/2026-07-18-hook-concurrency-resilience.md`).
-- Windows tests that construct a payload for the `Bash` tool must encode fixture paths with forward slashes; inserting `path.join()` backslashes makes the POSIX command target a different relative path and invalidates write-policy assertions (found in the four-way Windows CI matrix, 2026-07-21).
+- Preserve untracked user files and unrelated working-tree changes.
+- Keep provider modules independent of the retired event/task runtime. Tests
+  should exercise behavior, not source-text wording, unless the public Contract
+  itself is being asserted.
+- When a new invariant is added, add a focused acceptance test and include it
+  in `npm test`.

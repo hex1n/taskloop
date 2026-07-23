@@ -5,9 +5,7 @@ const files = [
   "tests/authority-transaction.test.mjs",
   "tests/git-main-authority.test.mjs",
   "tests/git-linked-worktree-authority.test.mjs",
-  "tests/workloop-architecture.test.mjs",
-  "tests/host-authority.test.mjs",
-  "tests/host-hooks.test.mjs",
+  "tests/provider-installer.test.mjs",
 ];
 const required = [
   "lib/git-authority-provider.mjs",

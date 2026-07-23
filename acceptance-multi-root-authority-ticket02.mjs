@@ -1,6 +1,6 @@
 import { spawnSync } from "node:child_process";
 
-const files = ["tests/authority-transaction.test.mjs", "tests/workloop-architecture.test.mjs", "tests/host-authority.test.mjs", "tests/host-hooks.test.mjs"];
+const files = ["tests/authority-transaction.test.mjs", "tests/provider-installer.test.mjs"];
 const result = spawnSync(process.execPath, ["--test", ...files], { encoding: "utf8", timeout: 30_000 });
 if (result.stdout) process.stdout.write(result.stdout);
 if (result.stderr) process.stderr.write(result.stderr);

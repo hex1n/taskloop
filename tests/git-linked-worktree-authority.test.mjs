@@ -210,7 +210,8 @@ test("a copied locator cannot route old task history at another live Git admin a
   const application = fs.readFileSync(path.join(ROOT, "lib", "provider-application.mjs"), "utf8");
   assert.match(application, /"tasks"/);
   const scripts = JSON.parse(fs.readFileSync(path.join(ROOT, "package.json"), "utf8")).scripts;
-  for (const name of ["test", "test:matrix", "test:windows"]) assert.match(scripts[name], /tests\/git-linked-worktree-authority\.test\.mjs/);
+  for (const name of ["test", "test:matrix"]) assert.match(scripts[name], /tests\/git-linked-worktree-authority\.test\.mjs/);
   const workflow = fs.readFileSync(path.join(ROOT, ".github", "workflows", "test.yml"), "utf8");
-  assert.match(workflow, /Current Git authority[\s\S]*tests\/git-linked-worktree-authority\.test\.mjs/);
+  assert.match(workflow, /Provider authority suite[\s\S]*npm test/);
+  assert.match(workflow, /Ticket acceptance suite[\s\S]*verify-provider-tickets\.mjs/);
 });

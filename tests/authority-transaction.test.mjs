@@ -212,5 +212,5 @@ test("new Contract seam is activated only by the application assembly and stays 
   assert.match(scripts.test, /tests\/authority-transaction\.test\.mjs/);
   assert.match(scripts["test:matrix"], /tests\/authority-transaction\.test\.mjs/);
   const workflow = fs.readFileSync(path.join(ROOT, ".github", "workflows", "test.yml"), "utf8");
-  assert.match(workflow, /Authority transaction contract[\s\S]*tests\/authority-transaction\.test\.mjs/);
+  assert.match(workflow, /Provider authority suite[\s\S]*npm test/);
 });
