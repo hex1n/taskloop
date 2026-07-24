@@ -7,7 +7,7 @@
 决策：BUILD（来源：用户明确要求重新规划并建设该能力）
 评审范围：correctness-only
 适用边界：Git 仓库支持同 worktree 路径分区和每 task 独占 linked worktree；完全位于 Git worktree 之外的 filesystem root 支持路径分区
-输入来源：仓库 `AGENTS.md`、README、`lib/application.mjs`、`lib/task-engine.mjs`、`lib/event-store.mjs`、`lib/task-store.mjs`、`lib/criterion.mjs`、`lib/supervision.mjs`、`lib/outcome-projector.mjs`、installer/uninstaller、现有测试、旧方案及其 NO-GO 审查记录、本轮 Git remove/prune 临时实验证据、四个独立机制 option card
+输入来源：仓库 `AGENTS.md`、README、`lib/application.mjs`、`历史任务状态运行时`、`lib/event-store.mjs`、`lib/task-store.mjs`、`lib/criterion.mjs`、`历史监督运行时`、`lib/outcome-projector.mjs`、installer/uninstaller、现有测试、旧方案及其 NO-GO 审查记录、本轮 Git remove/prune 临时实验证据、四个独立机制 option card
 
 ## TL;DR
 
@@ -558,10 +558,10 @@ authority selector 必须恰好选择一种：Git attachment 使用 `--repo <任
 - `lib/prims.mjs`：新 authority/schema vocabulary；删除 Contract 5/6 compatibility constants 和 dispatch。
 - `lib/event-store.mjs`：provider-neutral authority record、跨 task/attachment 原子 event batch、authority cursor、verified tail。
 - `lib/task-store.mjs`：provider control-root 下的 `state.json`、authority/attachment/task projection 和 rebuild。
-- `lib/task-engine.mjs`：AuthorityState reducer、Git/filesystem attachment、placement/scope/session 不变量。
+- `历史任务状态运行时`：AuthorityState reducer、Git/filesystem attachment、placement/scope/session 不变量。
 - `lib/application.mjs`：provider resolution、locator registration、filesystem authority inventory、open/join/tasks/reconcile/retire/export/stage/commit orchestration。
 - `lib/criterion.mjs`：per-attachment checkpoint、placement availability、freshness；Git provider 追加 landing commit。
-- `lib/supervision.mjs`：control-plane exclusion、target Git-containment/filesystem-locator routing、attachment claim validation、session/task binding、跨 authority attribution、直接 Git receipt。
+- `历史监督运行时`：control-plane exclusion、target Git-containment/filesystem-locator routing、attachment claim validation、session/task binding、跨 authority attribution、直接 Git receipt。
 - `lib/outcome-projector.mjs`：HOME per-authority outcome shards；与 filesystem authority API 隔离；删除 monolith current reader/migration。
 - `install.mjs` / `uninstall.mjs`：唯一当前 runtime；不触碰 repo state/旧 HOME projection；删除 Contract 5/6 pins。
 - skills/README/`AGENTS.md`：新 authority boundary、双 placement、orphan/retire、Git receipt 和权限语义。

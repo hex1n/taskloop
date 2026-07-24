@@ -91,14 +91,14 @@
 
 | 维度 | 什么时候涨 | 睡觉时涨吗 |
 |---|---|---|
-| `rounds` | **仅当判据打回**（`lib/task-engine.mjs:755`，unsatisfied 才 +1） | **否** |
+| `rounds` | **仅当判据打回**（`历史任务状态运行时:755`，unsatisfied 才 +1） | **否** |
 | `writes` | 仅当真写入 | **否** |
 | `output_tokens` | 仅当真产出 | **否** |
-| **`wall_clock`** | **`atEpochMs - createdAtMs`**（`lib/task-engine.mjs:211-215`，日历时间） | **是——照烧** |
+| **`wall_clock`** | **`atEpochMs - createdAtMs`**（`历史任务状态运行时:211-215`，日历时间） | **是——照烧** |
 
 四个预算维度里，**只有 wall-clock 会被夜晚本身烧光**。白天日历≈工作，这个预算是诚实的；**夜里两者脱钩 8 倍——它量的是「你睡了多久」，不是「它干了多久」。**
 
-后果：`resume` 的预算复检**只在 `out_of_budget` 挂起时才跑**（`lib/task-engine.mjs:626`），故 `needs_input` 挂一夜后早晨能正常 resume；但 `hookPretool` 会照查（`lib/application.mjs:940-946`）——**早晨醒来任务能恢复，却一个字也写不了**，直到先 amend 预算。
+后果：`resume` 的预算复检**只在 `out_of_budget` 挂起时才跑**（`历史任务状态运行时:626`），故 `needs_input` 挂一夜后早晨能正常 resume；但 `hookPretool` 会照查（`lib/application.mjs:940-946`）——**早晨醒来任务能恢复，却一个字也写不了**，直到先 amend 预算。
 
 **过夜开单画像：`--rounds 30`，不设 `--wall-clock-minutes`，不设 `--token-budget`。**
 
@@ -109,7 +109,7 @@
 
 过夜任务的正常形态是 **Design 2：夜里干完活、停在评审闸门，早晨那一眼就是机器地板要求的那次评审**——不是额外负担。这与票 07 的交付结论合流。
 
-不选 Design 1（夜里自关单）的理由：**自关单能力不由你在睡前决定，由判据凌晨三点打没打嗝决定。** 任何一次 `criterion_amend` 都把地板抬到 `substantial`（`lib/task-engine.mjs:126`）→ 强制 `fresh_context`。而 `1e123be8` 一晚吃了 **3 次**传输型 amend（命令行超长、`Get-FileHash` 缺失、`Test-Path` 语法）。**Design 1 是一个你无法预先承诺的设计：它会随机退化成 Design 2。** 既如此，不如把 D2 当正常形态——它永远可用、从不退化。
+不选 Design 1（夜里自关单）的理由：**自关单能力不由你在睡前决定，由判据凌晨三点打没打嗝决定。** 任何一次 `criterion_amend` 都把地板抬到 `substantial`（`历史任务状态运行时:126`）→ 强制 `fresh_context`。而 `1e123be8` 一晚吃了 **3 次**传输型 amend（命令行超长、`Get-FileHash` 缺失、`Test-Path` 语法）。**Design 1 是一个你无法预先承诺的设计：它会随机退化成 Design 2。** 既如此，不如把 D2 当正常形态——它永远可用、从不退化。
 
 **但 D2 当前不可强制**——见决议 6。在票 12 落地前，过夜的 D2 **只能靠纪律**。
 
@@ -128,7 +128,7 @@ const record = { review_id: randomUUID(), ..., level,
 if (!record.reviewer) return error("review requires --reviewer");
 ```
 
-**`reviewer` 是 agent 自己敲的一个自由字符串；`--blocking-findings 0` 是它自己填的数字。** 而 `acceptedReview`（`lib/task-engine.mjs:135-143`）只核对 generation_id、两个 revision、level 够不够高、`blocking_findings_count === 0`——**没有任何一行检查评审者是谁。**
+**`reviewer` 是 agent 自己敲的一个自由字符串；`--blocking-findings 0` 是它自己填的数字。** 而 `acceptedReview`（`历史任务状态运行时:135-143`）只核对 generation_id、两个 revision、level 够不够高、`blocking_findings_count === 0`——**没有任何一行检查评审者是谁。**
 
 ```
 taskloop review --level second-model --reviewer 随便写 --blocking-findings 0 --advisory-findings 0

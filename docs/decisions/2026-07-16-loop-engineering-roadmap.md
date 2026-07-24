@@ -30,10 +30,10 @@ v3 发布是天然里程碑，把路线图切成三波：**发布前（第一波
 
 | # | 项 | 落点 | Spec |
 |---|---|---|---|
-| 1.1 | 专用退出码：`unsatisfied` 挪离 `exit 1`（专用号如 3）、`satisfied` 挪离 `exit 0`（专用号如 4）、`0` = 没说话、禁透传；`open_requirement` 放行判定只认真红 | runtime（tri-state protocol、`lib/task-engine.mjs` open gate） | [判据传输形态](2026-07-16-criterion-transport-form.md)决议 1/2/3 |
+| 1.1 | 专用退出码：`unsatisfied` 挪离 `exit 1`（专用号如 3）、`satisfied` 挪离 `exit 0`（专用号如 4）、`0` = 没说话、禁透传；`open_requirement` 放行判定只认真红 | runtime（tri-state protocol、`历史任务状态运行时` open gate） | [判据传输形态](2026-07-16-criterion-transport-form.md)决议 1/2/3 |
 | 1.2 | 派发补全为按类型启动：`.mjs/.js` → `process.execPath`；`.cmd`/`.ps1`（win32）、`.sh`/shebang（posix）各自正确启动 | runtime（`lib/criterion.mjs:121`） | 同上决议 4 执行面 |
-| 1.3 | 指纹与消息层取材换源：判据 stdout 约定前缀行（取最后一条匹配）→ `signature`/`failure_summary`；无则 `signature = null`（null 不参与相同判定）、`failure_summary` = tail 开头 160 | runtime（`lib/application.mjs:625-626`、`lib/task-engine.mjs:483-485`；`:487-489` 一字不动） | [失败指纹取材](2026-07-16-failure-signature-provenance.md)决议 2/4/5 |
-| 1.4 | 三处接线：`output_tail` 接进 judgment；`remaining` 停印判据身份改印判据的话；stuck hold 带判据的话 | runtime（`lib/task-engine.mjs:485/489`、`lib/application.mjs:627/:633`；judgment schema 三字段不动） | [反馈质量](2026-07-15-feedback-quality-criterion-as-teacher.md)落点三条 |
+| 1.3 | 指纹与消息层取材换源：判据 stdout 约定前缀行（取最后一条匹配）→ `signature`/`failure_summary`；无则 `signature = null`（null 不参与相同判定）、`failure_summary` = tail 开头 160 | runtime（`lib/application.mjs:625-626`、`历史任务状态运行时:483-485`；`:487-489` 一字不动） | [失败指纹取材](2026-07-16-failure-signature-provenance.md)决议 2/4/5 |
+| 1.4 | 三处接线：`output_tail` 接进 judgment；`remaining` 停印判据身份改印判据的话；stuck hold 带判据的话 | runtime（`历史任务状态运行时:485/489`、`lib/application.mjs:627/:633`；judgment schema 三字段不动） | [反馈质量](2026-07-15-feedback-quality-criterion-as-teacher.md)落点三条 |
 | 1.5 | 判据契约文档一次定版：前缀行与提取规则（消息行不是裁决通道）＋专用退出码＋默认**推荐** `.mjs`（推荐非强制） | skills（loop-core 判据契约） | 15 决议 3、10 决议 4 |
 | 1.6 | 弃置未提交恒红测试 `tests/taskloop-powershell-criterion.test.mjs`（物理删除，处置已明记于决策记录） | 仓内清理 | 10 决议 5 |
 
@@ -83,10 +83,10 @@ v3 发布是天然里程碑，把路线图切成三波：**发布前（第一波
 | # | 项 | 落点 | Spec |
 |---|---|---|---|
 | 4.1 | 刻度重写：`provenance` 与 `input_coverage` 退出证明分级；新增 `criterion.authored_by`（沿用 `granted_by` 词汇） | runtime（`lib/criterion.mjs`） | [信任链](2026-07-15-trust-chain-authorship-review.md)执行项 1 |
-| 4.2 | 缺口判定改为仅时序违规（动工后 amend） | runtime（`lib/task-engine.mjs:102-105`） | 07 执行项 2 |
-| 4.3 | 机器地板不可豁免：`waived` 早返回下沉，`machineRiskFloor` 必须先算；豁免只作用于 `declared_risk` | runtime（`lib/task-engine.mjs:148`） | 07 执行项 3 |
+| 4.2 | 缺口判定改为仅时序违规（动工后 amend） | runtime（`历史任务状态运行时:102-105`） | 07 执行项 2 |
+| 4.3 | 机器地板不可豁免：`waived` 早返回下沉，`machineRiskFloor` 必须先算；豁免只作用于 `declared_risk` | runtime（`历史任务状态运行时:148`） | 07 执行项 3 |
 | 4.4 | `task_amended` 事件补 `artifact_revision`（`> 0` 即「动工后」的机器可读形态）——4.2 的时序线没有它答不了 | runtime（schema） | 07 执行项 4 |
-| 4.5 | 11 守卫最小修：去掉 `machineRiskFloor` reasons 上的 `&& risk === "routine"` 守卫；判级恒等可证、纯记账修复；v3 读时投影自动追溯全历史（晚做不丢数据，故不抢第一波） | runtime（`lib/task-engine.mjs:130-131`） | [风险地板口径](2026-07-16-risk-floor-calibration.md)决议 3 |
+| 4.5 | 11 守卫最小修：去掉 `machineRiskFloor` reasons 上的 `&& risk === "routine"` 守卫；判级恒等可证、纯记账修复；v3 读时投影自动追溯全历史（晚做不丢数据，故不抢第一波） | runtime（`历史任务状态运行时:130-131`） | [风险地板口径](2026-07-16-risk-floor-calibration.md)决议 3 |
 
 ### 第三波（建设面，殿后）
 
@@ -108,7 +108,7 @@ v3 发布是天然里程碑，把路线图切成三波：**发布前（第一波
 
 | # | 项 | 落点 | Spec |
 |---|---|---|---|
-| 6.1 | 两账拆分完整 spec：不可逆 grant kind 归类（publish 确定在内；destructive/git 按「撤得回吗」逐一归类）；关单地板 = 纯账 A = 缺口 × 实得赌注（v3 fold 口径：touched files、实际写入根、命令形状）；锚记录 schema 位；「无锚声称」查询类定义 | runtime（`lib/task-engine.mjs` 地板重构） | [两个门的输入认识论](2026-07-16-gate-input-epistemology.md)决议 1/2/4/5 |
+| 6.1 | 两账拆分完整 spec：不可逆 grant kind 归类（publish 确定在内；destructive/git 按「撤得回吗」逐一归类）；关单地板 = 纯账 A = 缺口 × 实得赌注（v3 fold 口径：touched files、实际写入根、命令形状）；锚记录 schema 位；「无锚声称」查询类定义 | runtime（`历史任务状态运行时` 地板重构） | [两个门的输入认识论](2026-07-16-gate-input-epistemology.md)决议 1/2/4/5 |
 | 6.2 | 「写入不可归因」升格为缺口信号：`["<command>"]` 按「看不清」抬缺口，含糊计价 | runtime（`lib/application.mjs:950` 消费侧） | 16 决议 3 |
 | 6.3 | `change_classes` 并轨 `declared_risk`：废独立法律效力，词表降为结构化 reason；path→class 住消费者层 | runtime | 16 决议 4 |
 | 6.4 | `permission_mode` 锚的**消费面**：内核只消费 `bypassPermissions`/其他 二元投影（唯一双宿主对称锚；细档位 Codex 侧恒定错值不可押；**raw 记账已在批 2.7，本项届时有 M1 以来的真实分布可校准**）。sandbox 轴双宿主不进 payload——处置（进程/文件系统级探测或接受不可观测）spec 时定 | runtime | 票 [17](../../.scratch/loop-engineering-best-practice/issues/17-host-key-observability.md) + findings（`research/host-key-observability` 分支） |

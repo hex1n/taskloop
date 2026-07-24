@@ -33,7 +33,7 @@
 
 ### 第一层：信号饱和（形态注定，非纪律）
 
-`lib/task-engine.mjs:105` 的 `adequate` 要求 `provenance === "repo"` **且** `input_coverage === "full"`，二者**只有文件判据够得着**。命令判据结构上永远拿不到 `repo`、永远没有 `declared_inputs` → 两条缺口理由每单必炸、10/10。
+`历史任务状态运行时:105` 的 `adequate` 要求 `provenance === "repo"` **且** `input_coverage === "full"`，二者**只有文件判据够得着**。命令判据结构上永远拿不到 `repo`、永远没有 `declared_inputs` → 两条缺口理由每单必炸、10/10。
 
 **一个 100% 触发的信号没有鉴别力。** 它区分不了任何东西，只能被绕过。
 
@@ -46,7 +46,7 @@
 
 ### 第二层：缺口自批不是洞，是付费通行
 
-`lib/task-engine.mjs:125`：任何 `proof_gap_acceptance` 把风险地板抬到 `substantial` → 强制 `fresh_context`。所以自批**不买逃逸，买的是一次评审**。机制这一环是对的。
+`历史任务状态运行时:125`：任何 `proof_gap_acceptance` 把风险地板抬到 `substantial` → 强制 `fresh_context`。所以自批**不买逃逸，买的是一次评审**。机制这一环是对的。
 
 **副产品：票 05「评审纪律在新窗口不是零，4/4 fresh_context」成立，但归因错了。** 那不是纪律，是这条机械链强制的：
 
@@ -59,7 +59,7 @@
 
 ### 第三层（最深）：自证豁免删掉机器地板
 
-`lib/task-engine.mjs:148`——`review_policy === "waived"` 在**第一行就 return，在 `machineRiskFloor` 被计算之前**：
+`历史任务状态运行时:148`——`review_policy === "waived"` 在**第一行就 return，在 `machineRiskFloor` 被计算之前**：
 
 | 时间 | declared | **effective 风险** | 机器地板理由 | 评审 |
 |---|---|---|---|---|
@@ -115,7 +115,7 @@
 - `declared_risk` 是 agent 说的 → 可豁免；
 - **机器地板**是 runtime 从**自己发出的 grant、自己记的缺口**算出来的事实 → **任何声明都不该抹掉它**。
 
-`review_policy === "waived"` 不再短路（`lib/task-engine.mjs:148`），只能盖住 `declared_risk` 那一半，`machineRiskFloor` 永远参与计算。
+`review_policy === "waived"` 不再短路（`历史任务状态运行时:148`），只能盖住 `declared_risk` 那一半，`machineRiskFloor` 永远参与计算。
 
 「豁免必须 user」不作为独立要求——`--granted-by user` 同样是 agent 自己敲的，那是减速带不是闸门。
 
@@ -134,7 +134,7 @@
 
 **新规则会漏掉 `07-13 14:58` 那单**：writes=21、owner 亲手 declare `routine`、无判据 amend → 新规则下机器地板为空 → **零评审**。旧的意外链强制过它一次 `fresh_context`。
 
-即：坏钟抓到过它，新表漏了它。`many_touched_files` 地板（`lib/task-engine.mjs:131`）管的是「碰了几个文件」（>10），不是「写了多少次」——21 次写落在 ≤10 个文件里就溜过去。
+即：坏钟抓到过它，新表漏了它。`many_touched_files` 地板（`历史任务状态运行时:131`）管的是「碰了几个文件」（>10），不是「写了多少次」——21 次写落在 ≤10 个文件里就溜过去。
 
 **此项不在本票裁**，已出票：[11 — 风险地板的口径](../../.scratch/loop-engineering-best-practice/issues/11-risk-floor-calibration.md)。
 
@@ -150,8 +150,8 @@
 ## 迁移面 / 执行项（进 #04，本图 plan-not-do）
 
 1. `lib/criterion.mjs`：`provenance` 与 `input_coverage` 退出证明分级；新增 `criterion.authored_by`（沿用 `granted_by` 词汇）。戳破 `full` 的过度声称。
-2. `lib/task-engine.mjs:102-105`：`projectProofAssurance` 的缺口判定改为**仅时序违规**（动工后 amend）。
-3. `lib/task-engine.mjs:148`：`projectReviewRequirement` 的 `waived` 早返回下沉——`machineRiskFloor` 必须先算；豁免只作用于 `declared_risk`。
+2. `历史任务状态运行时:102-105`：`projectProofAssurance` 的缺口判定改为**仅时序违规**（动工后 amend）。
+3. `历史任务状态运行时:148`：`projectReviewRequirement` 的 `waived` 早返回下沉——`machineRiskFloor` 必须先算；豁免只作用于 `declared_risk`。
 4. **schema 缺口**：`task_amended` 事件**不带 `artifact_revision`**，故「开单后立刻修判据」（A1 的 r2，开单 2 分钟后、判据压根没跑起来）与「动工后改判据」（r11/r16，隔天、9 次写入之后）在账本里**长得一模一样**。**决议 4 的线，现有 schema 答不了。** 落地时须给 amend 事件补 `artifact_revision`（`artifact_revision > 0` 即「动工后」的机器可读形态）。与票 09 的账本消费者改造合并考虑。
 5. **传输故障误分类**（本票查证时发现，非本票裁决，归票 10）：`"The command line is too long."` 被记成 `verdict=unsatisfied, exec_error=null, exit=1`——**判据压根没跑起来，账本却显示「判据跑了，说没达标」**。runtime 手上有 tail 证据却没用它分类。与票 06 的「runtime 手上有 `output_tail` 却扔了」同形。
 

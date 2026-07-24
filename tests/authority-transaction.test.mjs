@@ -33,8 +33,9 @@ test("physical lock protocol permits explicit parent locks to authority and reje
   const locks = lockFixture(t);
   const otherProviderLocks = lockFixture(t);
   for (const outer of ["git_operation", "criterion_lease"]) assert.equal(nested(locks, outer, "authority")(), "ok");
-  for (const lockClass of ["authority", "git_operation", "criterion_lease", "outcome"]) assert.throws(nested(locks, lockClass, lockClass), /lock order violation|non-reentrant/);
-  for (const [outer, inner] of [["authority", "git_operation"], ["authority", "criterion_lease"], ["authority", "outcome"], ["git_operation", "criterion_lease"], ["git_operation", "outcome"], ["criterion_lease", "git_operation"], ["criterion_lease", "outcome"], ["outcome", "authority"]]) assert.throws(nested(locks, outer, inner), /lock order violation/);
+  assert.equal(locks.withLock("maintenance", "maintenance-root", () => "ok"), "ok");
+  for (const lockClass of ["authority", "git_operation", "criterion_lease", "outcome", "maintenance"]) assert.throws(nested(locks, lockClass, lockClass), /lock order violation|non-reentrant/);
+  for (const [outer, inner] of [["authority", "git_operation"], ["authority", "criterion_lease"], ["authority", "outcome"], ["git_operation", "criterion_lease"], ["git_operation", "outcome"], ["criterion_lease", "git_operation"], ["criterion_lease", "outcome"], ["outcome", "authority"], ["maintenance", "authority"], ["authority", "maintenance"], ["maintenance", "outcome"], ["outcome", "maintenance"]]) assert.throws(nested(locks, outer, inner), /lock order violation/);
   assert.throws(() => locks.withLock("authority", "provider-a", () => otherProviderLocks.withLock("authority", "provider-b", () => assert.fail("must not hold two authorities"))), /two authorities cannot be held together/);
   assert.throws(() => locks.withLock("authority", "async", async () => {}), /must be synchronous/);
   assert.throws(() => runAuthorityTransaction({ append: () => assert.fail("must not append without a lock") }), (error) => error.code === "INVALID_LOCK_MANAGER");
@@ -204,7 +205,7 @@ test("new Contract seam is activated only by the application assembly and stays 
   const seam = fs.readFileSync(path.join(ROOT, "lib", "authority-transaction.mjs"), "utf8");
   assert.deepEqual([...seam.matchAll(/from "([^"]+)"/g)].map((match) => match[1]), ["./prims.mjs"]);
   assert.doesNotMatch(seam, /spikes\/multi-root-authority|authority\.jsonl|\.workloop-root\.jsonl/);
-  const acceptance = fs.readFileSync(path.join(ROOT, "acceptance-multi-root-authority-ticket02.mjs"), "utf8");
+  const acceptance = fs.readFileSync(path.join(ROOT, "tests", "acceptance", "provider", "ticket02.mjs"), "utf8");
   assert.match(acceptance, /timeout: 30_000/);
   assert.match(acceptance, /process\.exit\(2\)/);
   assert.match(acceptance, /result\.status === 0 \? 4 : 3/);

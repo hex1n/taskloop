@@ -2,7 +2,7 @@
 
 ## 问题摘要
 
-`canonicalWriteTarget`(`lib/supervision.mjs:1638`)把三种语义完全不同的情况
+`canonicalWriteTarget`(`历史监督运行时:1638`)把三种语义完全不同的情况
 压成同一个返回值 `null`:
 
 1. 目标为空(确实没有写目标)
@@ -87,7 +87,7 @@ Windows 那条测试。
 ## 未验证事项(执行前必须先查)
 
 `canonicalWriteTarget` 另有 6 个调用点未逐一核查是否存在同样的 `target &&`
-fail-open 模式:`lib/supervision.mjs` 的 1520、1539、1902、1939、1950、2004。
+fail-open 模式:`历史监督运行时` 的 1520、1539、1902、1939、1950、2004。
 若它们同样漏,则属同一个洞的其他出口,方案范围需相应扩大。
 
 ## 备选方案

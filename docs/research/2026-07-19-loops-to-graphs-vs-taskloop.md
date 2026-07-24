@@ -4,7 +4,7 @@
 **深度**: Standard
 **核心结论**: taskloop 不是"正在从循环迁向图"的中位数案例——文章的三必需品（锚点、冻结节点、图外判断）已是显式实现并有决策文档记录推导，两处（测量衰变的含糊计价、闸门反噬定律）比文章更深；真实缺口在文章开篇案例那一层——关单后成果是否存活的慢反馈（"续约率"传感器）不存在，且审计通道单一。
 **产物类型**: supporting
-**验证状态**: 本 session 读取 `AGENTS.md` 全文、`skills/meta-loop|judgmentloop/SKILL.md` 全文、`lib/task-engine.mjs:100-184`、三份 2026-07-16 决策文档全文；grep 核实 `criterion.mjs` 判据执行、`agent_id` 锚落地、ledger 查询面、检测器自述。未逐行读完 `lib/application.mjs`（1522 行）与 `lib/supervision.mjs`（2293 行）。**同日追加**：存活连接 spike 在本仓库亲跑（见文末追记），开放问题 1 已关闭。
+**验证状态**: 本 session 读取 `AGENTS.md` 全文、`skills/meta-loop|judgmentloop/SKILL.md` 全文、`历史任务状态运行时:100-184`、三份 2026-07-16 决策文档全文；grep 核实 `criterion.mjs` 判据执行、`agent_id` 锚落地、ledger 查询面、检测器自述。未逐行读完 `lib/application.mjs`（1522 行）与 `历史监督运行时`（2293 行）。**同日追加**：存活连接 spike 在本仓库亲跑（见文末追记），开放问题 1 已关闭。
 **开放问题**: 1 — 见文末（原开放问题 1 已由追记关闭）
 **关联**: `2026-07-19-loops-to-graphs-article-digest.md`（文章要点译注）、`2026-07-11-taskloop-vs-loop-engineering.md`（业界分层对照）
 
@@ -14,7 +14,7 @@
 
 | 文章概念 | taskloop 实现 | 判定 | 证据 |
 |---|---|---|---|
-| 古德哈特（指标被刷） | 判据被定性为"真相的有损代理"；配对手段 = 风险驱动的强制评审 + 判据指纹（中途改写 = 新 generation，作废已有评审） | 部分覆盖 | `lib/task-engine.mjs:136-143`；`docs/decisions/2026-07-16-gate-input-epistemology.md` |
+| 古德哈特（指标被刷） | 判据被定性为"真相的有损代理"；配对手段 = 风险驱动的强制评审 + 判据指纹（中途改写 = 新 generation，作废已有评审） | 部分覆盖 | `历史任务状态运行时:136-143`；`docs/decisions/2026-07-16-gate-input-epistemology.md` |
 | 向上盲目（参照值无人质疑） | 参照值修订受治理：amend 走 grant、判据改写产生新代、grant 词汇只从真实 deny 证据生长 | 已实现 | `AGENTS.md:24`；`skills/meta-loop/SKILL.md:49-70`（authority_friction 挖掘） |
 | 循环冲突（仲裁缺位） | 只有互斥没有仲裁：并发会话按对方仓库 envelope 相交判冲突；宿主风险底线永不下放 | 最小实现（设计上出让：driver/调度器在仓外） | `AGENTS.md:25-26`、`AGENTS.md:32` |
 | 测量衰变（无人看守看守者） | 完整性是账本一等输出：covered/gapped/unknown 三态；序号跳空/重置朝诚实方向退化；传感器缺席报 unknown 不报 zero | **超出文章** | `skills/meta-loop/SKILL.md:16-34`；`docs/decisions/2026-07-16-adoption-observation-into-ledger.md` 决议 3/5 |
@@ -24,7 +24,7 @@
 | 必需品 | taskloop 实现 | 证据 |
 |---|---|---|
 | 锚点 | 判据由 runtime 自己 `spawnSync` 执行、读退出码；`verify --record` 持久化 `cli_verify` 溯源观测；评审独立性锚在宿主递来、agent 写不到的 `agent_id` | `lib/criterion.mjs:191-203`；`lib/application.mjs:747-771`；`lib/host-hooks.mjs:38` + `lib/application.mjs:1220`（已落地） |
-| 冻结节点 | 机器风险底线不可豁免（waived 仅在底线 routine 时生效）；不可逆权力硬抬 critical；`self_reread` 结构性排除在评审梯外 | `lib/task-engine.mjs:150`、`:131`；`docs/decisions/2026-07-16-review-independence-anchor.md` 决议 1 |
+| 冻结节点 | 机器风险底线不可豁免（waived 仅在底线 routine 时生效）；不可逆权力硬抬 critical；`self_reread` 结构性排除在评审梯外 | `历史任务状态运行时:150`、`:131`；`docs/decisions/2026-07-16-review-independence-anchor.md` 决议 1 |
 | 图外判断 | 内核显式承认"够不到人"：`--granted-by user` 验证不了；judgmentloop 终结动词属于人；meta-loop 无机器阈值、永不无人值守 | `docs/decisions/2026-07-16-gate-input-epistemology.md` 决议 5；`skills/judgmentloop/SKILL.md:50-51`;`skills/meta-loop/SKILL.md:94-96` |
 
 ## 仓库比文章深的两处
@@ -36,7 +36,7 @@
 
 1. **关单后无慢反馈——"续约率"传感器缺失**。账本查询面只有 `unanchored_review_claims` 与 `authority_friction`（`lib/application.mjs:1251-1255`）；`outcome-projector.mjs` 中 revert/reopen/regression 零命中。achieved 的成果次周被回滚、被后续任务重写、判据通过但用户弃用——都不会回流账本。票 13 的 adoption 观测覆盖"绕过监督的**工作流**是否补单"，不覆盖"关单的**成果**是否存活"。这正是文章开篇案例的形状：解决率漂亮，流失率在图外。
 2. **审计通道单一**。meta-loop 被要求只读 `ledger --json`（`skills/meta-loop/SKILL.md:9-10`）。完整性三态防传感器缺口，防不了投影器自身的错——fold 有 bug 审计者原样继承。仓库历史即证据：票 12 记录过账本白名单销毁字段、文档错误"持续生产错误的票"等审计输入被污染的真实案例。缓解：锚行来自执行过的命令，人随时可读原始文件；但独立第二传感器不存在。
-3. **冻结节点是协作式的**。命令安全检测自述 "it raises the cost of the obvious dangerous forms, it is not a sandbox"（`lib/supervision.mjs:1095` 附近）。仓库的处置是定价后接受（票 16 决议 3）而非修复——自家框架内自洽，但按文章"冻结规则在压力下保持冻结"的标准，该节点多孔；真正的硬边界显式让渡给宿主层。
+3. **冻结节点是协作式的**。命令安全检测自述 "it raises the cost of the obvious dangerous forms, it is not a sandbox"（`历史监督运行时:1095` 附近）。仓库的处置是定价后接受（票 16 决议 3）而非修复——自家框架内自洽，但按文章"冻结规则在压力下保持冻结"的标准，该节点多孔；真正的硬边界显式让渡给宿主层。
 
 ## 边界与开放问题
 

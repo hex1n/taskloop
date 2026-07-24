@@ -5,9 +5,9 @@ import path from "node:path";
 import { spawnSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 
-import { TRUSTED_REPOSITORY, TRUSTED_WORKFLOW_PATH } from "./spikes/multi-root-authority/receipt.mjs";
+import { TRUSTED_REPOSITORY, TRUSTED_WORKFLOW_PATH } from "./receipt.mjs";
 
-const root = path.dirname(fileURLToPath(import.meta.url));
+const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../..");
 const issueRoot = path.join(root, ".scratch", "multi-root-authority", "issues");
 const deterministicVerifier = path.join(root, "tests", "verify-full.mjs");
 const receiptCli = path.join(root, "spikes", "multi-root-authority", "receipt-cli.mjs");

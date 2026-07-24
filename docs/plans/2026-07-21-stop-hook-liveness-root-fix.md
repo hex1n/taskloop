@@ -83,7 +83,7 @@ review_budget: 实施前一次plan review；完成后一次完整code review；H
 ### 真实约束
 
 1. 保持 dependency-free Node.js CLI；`lib/application.mjs` 仍是唯一 assembly，leaf module 只依赖 `lib/prims.mjs`。
-2. lifecycle mutation 继续由 `lib/task-engine.mjs` 决定；`.workloop/events.jsonl` 继续是 task authority。
+2. lifecycle mutation 继续由 `历史任务状态运行时` 决定；`.workloop/events.jsonl` 继续是 task authority。
 3. criterion 仍基于真实仓库内容运行，side-effect detection、drift、generation、artifact revision 和 review 语义不能弱化。
 4. PreToolUse 对不可解析目标和 control state 继续 fail closed；release-only Stop 不能伪装成 hard gate。
 5. 用户拥有 Host Hook 配置；installer 只能诊断和生成 recipe，不能静默改写。

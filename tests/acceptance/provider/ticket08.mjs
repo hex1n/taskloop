@@ -12,7 +12,7 @@ const required = [
   "lib/provider-application.mjs",
   "lib/git-authority-provider.mjs",
   "lib/filesystem-authority-provider.mjs",
-  "lib/task-engine.mjs",
+  "lib/authority-state.mjs",
   "tests/attachment-recovery-authority.test.mjs",
 ];
 if (required.some((target) => !fs.existsSync(target))) {

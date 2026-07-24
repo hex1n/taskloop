@@ -1,56 +1,58 @@
-# workloop repository
+# Workloop repository
 
 ## Start and verify
 
-This repository ships the provider-authority Workloop runtime. Run `npm test`
-before handoff, and `node bin/workloop.mjs help` to inspect the public Contract.
+This repository implements a provider-neutral loop-engineering runtime.
 
-## Current Contract
+- `npm test` verifies the runtime, installer, provider matrix, and packaged
+  Skill contract.
+- `node tests/verify-provider-tickets.mjs` verifies the Ticket 02–10 acceptance
+  criteria.
+- `node bin/workloop.mjs help` prints the public Contract and verb surface.
 
-- `bin/workloop.mjs` is only the process entry.
+## Architecture
+
+- `bin/workloop.mjs` is the only runtime process entry.
 - `lib/provider-application.mjs` is the only public application assembly.
-- Public verbs are listed by `help`; do not add command aliases or legacy
-  runtime routes.
+- Keep public verbs exactly aligned with `help` and the current Contract.
 - Git and detached-filesystem providers own replayable authority journals;
-  locators are attachments, never authority.
+  locators are attachments while provider authority remains canonical.
 - Task-scoped Git receipt operations stage and commit only the selected task's
   paths. Concurrent disjoint tasks may share an attachment; overlapping claims
   are rejected.
-- Every filesystem root is explicit. It may be outside Git and must not overlap
-  another detached authority.
+- Detached-filesystem authority uses an explicit root outside or inside Git and
+  requires non-overlapping roots.
+- Outcome shards in `WORKLOOP_AUTHORITY_HOME` are best-effort projections and
+  never adjudication inputs.
 
-## Hooks and installation
+## Host contract
 
-- The host exclusively decides whether a tool executes. Default `observe` and
-  `nudge` Hooks only observe/record and must fail open.
-- Only explicit `deny` PreToolUse may return a rejection. Codex Stop always
-  releases.
-- Only `claude` and `codex` Hook profiles exist. Do not add `codex-safe`,
-  profile aliases, or a compatibility fallback.
+- The host owns execution approval and its Hook files. Workloop installs
+  runtime and Skill assets without rewriting host Hook configuration.
+- `observe` and `nudge` record available evidence and release on routing or
+  configuration failure. Codex Stop always releases.
+- Explicit `deny` PreToolUse is the only Workloop mode that may reject.
+- `claude` and `codex` are the complete Hook profile set.
 - A stale or unsupported `observe`/`nudge` invocation is released with a
-  diagnostic and no recording; it is not an accepted profile. `deny` rejects
-  it. This preserves the default non-blocking host contract during manual
-  configuration repair.
-- Host Hook files are owner-managed. The installer must never rewrite them.
-  It must refuse activation before replacing a shim when it detects a Workloop
-  Codex Hook that is not `--profile codex`.
-- The installer does not adopt legacy runtime pins or unproven skill trees.
+  diagnostic and no recording; explicit `deny` rejects it.
+- Installer activation preflight accepts a discovered Codex Workloop handler
+  only when it uses `--profile codex`, and it replaces only proven
+  Workloop-owned runtime and Skill assets.
 
 ## State and recovery
 
-- Provider authority is canonical; outcome shards in `WORKLOOP_AUTHORITY_HOME`
-  are best-effort caches and never an input to adjudication.
-- Earlier `.workloop` task artifacts are opaque. Never parse or migrate them.
-  `archive-incompatible-state` may only copy recognized files with both explicit
-  user provenance and a reason; it never replaces or deletes the source.
+- Treat earlier `.workloop` task artifacts as opaque. Preserve recognized files
+  byte-for-byte with `archive-incompatible-state`, explicit user provenance,
+  and a reason; leave the source in place.
 - Attachment move, copy/collision, reattach, cleanup, and identity fork paths
-  must preserve durable truth and use idempotent command provenance.
+  preserve durable truth and use idempotent command provenance.
+- Provider modules stay independent of the retired event/task runtime.
 
-## Scope discipline
+## Change contract
 
-- Preserve untracked user files and unrelated working-tree changes.
-- Keep provider modules independent of the retired event/task runtime. Tests
-  should exercise behavior, not source-text wording, unless the public Contract
-  itself is being asserted.
-- When a new invariant is added, add a focused acceptance test and include it
-  in `npm test`.
+- Assert behavior at public seams. Source-text assertions are reserved for
+  shipped Contract text, package closure, and removed runtime surfaces.
+- Add a focused acceptance test for each new invariant and include it in
+  `npm test`.
+- Keep the source Skill tree, installer package closure, and
+  `tests/skills.test.mjs` synchronized.

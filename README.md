@@ -66,7 +66,7 @@ node bin/workloop.mjs commit --target src/widget.mjs --task-id <task-id> \
   --message "fix: deterministic widget" --command-id commit-widget-1 \
   --granted-by user --reason "commit only this task"
 node bin/workloop.mjs certify --target src/widget.mjs --task-id <task-id> \
-  --criterion-file acceptance.mjs --command-id certify-widget-1 \
+  --criterion-file examples/read-only-criterion.mjs --command-id certify-widget-1 \
   --granted-by user --reason "criterion passed"
 ```
 

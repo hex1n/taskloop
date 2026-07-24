@@ -11,7 +11,7 @@ const files = [
 ];
 const required = [
   "lib/git-authority-provider.mjs",
-  "lib/task-engine.mjs",
+  "lib/authority-state.mjs",
   ".github/workflows/test.yml",
   "tests/git-exclusive-worktree-authority.test.mjs",
 ];

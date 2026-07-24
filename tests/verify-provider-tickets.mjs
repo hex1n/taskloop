@@ -5,7 +5,7 @@ import { fileURLToPath } from "node:url";
 
 const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const tickets = [2, 3, 4, 5, 6, 7, 8, 9, 10].map((number) =>
-  `acceptance-multi-root-authority-ticket${String(number).padStart(2, "0")}.mjs`,
+  path.join("tests", "acceptance", "provider", `ticket${String(number).padStart(2, "0")}.mjs`),
 );
 for (const ticket of tickets) {
   const result = spawnSync(process.execPath, [ticket], { cwd: root, encoding: "utf8", timeout: 180_000 });

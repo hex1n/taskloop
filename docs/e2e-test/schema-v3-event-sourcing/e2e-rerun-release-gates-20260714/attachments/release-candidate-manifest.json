@@ -229,18 +229,6 @@
     },
     {
       "status": "tracked-change",
-      "path": "lib/supervision.mjs",
-      "byte_count": 26135,
-      "sha256": "sha256:fabe91f556fb37c743e27ce565d0d0161badc6a9d15160da2fd9d86e12657a91"
-    },
-    {
-      "status": "tracked-change",
-      "path": "lib/task-engine.mjs",
-      "byte_count": 66126,
-      "sha256": "sha256:ddb1a90fd6c10c50628be694821677a5bb9d0af9d59683bf1c69c6b5c3ef9239"
-    },
-    {
-      "status": "tracked-change",
       "path": "lib/task-store.mjs",
       "byte_count": 15377,
       "sha256": "sha256:653f8c4e312e9f7db3df281025cc0e54fdebfc062dc672a4fc219ea562d43d77"

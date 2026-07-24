@@ -30,7 +30,8 @@ A criterion file is executed only by `certify` and must be read-only:
 
 - exit `4`: satisfied;
 - exit `3`: unsatisfied;
-- exit `2`: indeterminate.
+- exit `2`: explicitly indeterminate;
+- exit `0`: silent, therefore indeterminate.
 
 Use an explicit `--criterion-file` relative to the selected target's root.
 Do not infer completion from a Hook, a task intent, or an outcome shard.

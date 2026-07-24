@@ -17,6 +17,47 @@ test("task-scoped stage preserves another task index entry and commit leaves it 
 
 test("a clean stage receipt causally binds a clean task-scoped commit", (t) => { const fx = fixture(t); const source = open(fx, "src", "open-clean"); fs.writeFileSync(path.join(fx.repo, "src", "a.txt"), "clean source change\n"); const staged = json(run(["stage", "--target", path.join(fx.repo, "src", "a.txt"), "--task-id", source.task.task_id, "--command-id", "stage-clean", "--reason", "stage source task", "--granted-by", "user"], fx)); assert.equal(staged.receipt.clean, true); const committed = json(run(["commit", "--target", path.join(fx.repo, "src", "a.txt"), "--task-id", source.task.task_id, "--message", "clean source", "--command-id", "commit-clean", "--reason", "commit source task", "--granted-by", "user"], fx)); assert.equal(committed.receipt.clean, true); assert.equal(committed.receipt.prior_head, committed.receipt.parent_oid); assert.deepEqual(committed.receipt.diff_paths, ["src/a.txt"]); });
 
+test("receipt commands reject a terminal task before changing the Git index or HEAD", (t) => {
+  const fx = fixture(t);
+  const source = open(fx, "src", "open-terminal-receipt");
+  json(run(["abandon", "--target", path.join(fx.repo, "src", "a.txt"), "--task-id", source.task.task_id, "--command-id", "abandon-terminal-receipt", "--reason", "task is no longer active", "--granted-by", "user"], fx));
+  fs.writeFileSync(path.join(fx.repo, "src", "a.txt"), "terminal task change\n");
+  const statusBefore = git(fx.repo, ["status", "--porcelain=v1"]);
+  const headBefore = git(fx.repo, ["rev-parse", "HEAD"]);
+
+  const staged = run(["stage", "--target", path.join(fx.repo, "src", "a.txt"), "--task-id", source.task.task_id, "--command-id", "stage-terminal-receipt", "--reason", "must reject before Git", "--granted-by", "user"], fx);
+  assert.equal(staged.status, 2);
+  assert.match(staged.stderr, /active task/);
+  assert.equal(git(fx.repo, ["status", "--porcelain=v1"]), statusBefore);
+
+  const committed = run(["commit", "--target", path.join(fx.repo, "src", "a.txt"), "--task-id", source.task.task_id, "--message", "must not commit", "--command-id", "commit-terminal-receipt", "--reason", "must reject before Git", "--granted-by", "user"], fx);
+  assert.equal(committed.status, 2);
+  assert.match(committed.stderr, /active task/);
+  assert.equal(git(fx.repo, ["rev-parse", "HEAD"]), headBefore);
+  assert.equal(git(fx.repo, ["status", "--porcelain=v1"]), statusBefore);
+});
+
+test("repository-root receipts exclude Workloop control and incompatible-archive paths", (t) => {
+  const fx = fixture(t);
+  const opened = json(run([
+    "open", "--target", path.join(fx.repo, "src", "a.txt"),
+    "--goal", "root-owned task", "--write-root", ".", "--command-id", "open-root-receipt",
+    "--reason", "root receipt control-plane regression", "--granted-by", "self",
+  ], fx));
+  fs.writeFileSync(path.join(fx.repo, "src", "a.txt"), "root task change\n");
+  const archiveRoot = path.join(fx.repo, ".workloop-incompatible-archive");
+  fs.mkdirSync(archiveRoot);
+  fs.writeFileSync(path.join(archiveRoot, "opaque.txt"), "must remain outside task receipts\n");
+
+  const staged = json(run([
+    "stage", "--target", path.join(fx.repo, "src", "a.txt"), "--task-id", opened.task.task_id,
+    "--command-id", "stage-root-receipt", "--reason", "stage only task data", "--granted-by", "user",
+  ], fx));
+  assert.deepEqual(staged.receipt.paths, ["src/a.txt"]);
+  assert.deepEqual(git(fx.repo, ["diff", "--cached", "--name-only"]).split("\n").filter(Boolean), ["src/a.txt"]);
+  assert.match(git(fx.repo, ["status", "--porcelain=v1"]), /\?\? \.workloop-incompatible-archive\//);
+});
+
 test("a post-stage host index mutation persists an uncertain commit receipt", (t) => { const fx = fixture(t); const source = open(fx, "src", "open-post-stage"); fs.writeFileSync(path.join(fx.repo, "src", "a.txt"), "source change\n"); const staged = json(run(["stage", "--target", path.join(fx.repo, "src", "a.txt"), "--task-id", source.task.task_id, "--command-id", "stage-post-stage", "--reason", "stage source task", "--granted-by", "user"], fx)); assert.equal(staged.receipt.clean, true); fs.writeFileSync(path.join(fx.repo, "docs", "b.txt"), "host index mutation\n"); git(fx.repo, ["add", "docs/b.txt"]); const committed = json(run(["commit", "--target", path.join(fx.repo, "src", "a.txt"), "--task-id", source.task.task_id, "--message", "source only", "--command-id", "commit-post-stage", "--reason", "commit source task", "--granted-by", "user"], fx)); assert.equal(committed.receipt.clean, false); assert.equal(committed.receipt.status, "uncertain"); assert.deepEqual(git(fx.repo, ["diff", "--cached", "--name-only"]).split("\n").filter(Boolean), ["docs/b.txt"]); });
 
 test("certify achieves a Git task only while its clean receipt remains landed", (t) => { const fx = fixture(t); const source = open(fx, "src", "open-certify"); fs.writeFileSync(path.join(fx.repo, "src", "a.txt"), "certified source change\n"); const staged = json(run(["stage", "--target", path.join(fx.repo, "src", "a.txt"), "--task-id", source.task.task_id, "--command-id", "stage-certify", "--reason", "stage", "--granted-by", "user"], fx)); assert.equal(staged.receipt.clean, true); const committed = json(run(["commit", "--target", path.join(fx.repo, "src", "a.txt"), "--task-id", source.task.task_id, "--message", "certify", "--command-id", "commit-certify", "--reason", "commit", "--granted-by", "user"], fx)); fs.writeFileSync(path.join(fx.repo, "check.mjs"), "process.exit(4);\n"); const certified = json(run(["certify", "--target", path.join(fx.repo, "src", "a.txt"), "--task-id", source.task.task_id, "--criterion-file", "check.mjs", "--command-id", "certify", "--reason", "criterion satisfied", "--granted-by", "self"], fx)); assert.equal(certified.task.lifecycle.outcome, "achieved"); assert.equal(certified.task.certification.commit_oid, committed.receipt.commit_oid); });

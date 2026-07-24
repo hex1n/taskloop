@@ -13,7 +13,7 @@
 
 ## 决议 1：`fresh_context` 的所指 = 不共享信念；机器锚得到必要条件，锚不到属性本身
 
-内核**从没定义过** `fresh_context`：`REVIEW_ORDER = ["fresh_context","second_model"]`（`lib/task-engine.mjs:78`）只是根梯子，skills 里唯一措辞是 `skills/workloop/SKILL.md:63` 的「a reviewer at least that independent」。票面替它现造了机器所指「= 另一个 session」——**该所指已被实测证否**（决议 3）。
+内核**从没定义过** `fresh_context`：`REVIEW_ORDER = ["fresh_context","second_model"]`（`历史任务状态运行时:78`）只是根梯子，skills 里唯一措辞是 `skills/workloop/SKILL.md:63` 的「a reviewer at least that independent」。票面替它现造了机器所指「= 另一个 session」——**该所指已被实测证否**（决议 3）。
 
 第一性重推：评审的价值在本图只有一处实证——票 03 的「**fresh-context agent ≥5 次抓事实错，抓法是逐个打开核对**」。它抓得到，是因为它**不共享干活 agent 的信念**：它没有「我写过 X」这段记忆，要说任何话就必须去打开文件，故其断言**由 artifact 重新推导**而非继承。
 

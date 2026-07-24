@@ -120,7 +120,7 @@ fold 是**纯函数**：events → 指标。确定性，同输入同输出。
 | independent falsification when high-stakes | **07 裁的机器风险地板**（`machineRiskFloor`，不可豁免） |
 | Never batch candidates into one round | **runtime 单任务模型**——一次只能开一个 task |
 | never accept on the author's re-read | **review floor** |
-| filed as provisional with the evidence gap named | **`accept-proof-gap` → `proof.state: provisional`**（`task-engine.mjs:109`） |
+| filed as provisional with the evidence gap named | **`accept-proof-gap` → `proof.state: provisional`**（`历史任务状态运行时:109`） |
 
 **meta-loop 自己的原则判了自己第 4/5 步的死刑**——它写着「**Rules default into the machine, not prose**」。那两步整段是散文重述已在机器里的规则：**第二处真相源，必然漂移**（与决议 3 否掉 (c) 同理：那里是 schema 知识第二处，这里是纪律知识第二处）。
 

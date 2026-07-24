@@ -17,13 +17,13 @@
 - **Standards 去重**:抽 `gitRevParse(dir,arg)`(`repoCommonDir` 与 `containingRepoRoot` 共用);抽 `foldedEnvelopeGlobs`(`foreignWriteDecision` 与 `externalTargetDecision` 共用)。
 - **Spec 覆盖缺口**:补一条 Write 工具写入外部仓库冲突 envelope 的回归测试(此前 Part 5 仅用 Bash `cp` 驱动共享路径)。共 25 个测试,`npm test` 121 + 199 pass / 0 fail / 7 skip。
 
-**阶段 3(`git -C` 跨仓库代查)**:外部会话的非只读 `git -C <dir> <subcommand>` 改由**目标仓库自身的 taskloop 状态**裁决(`gitExternalDelegation`,`lib/supervision.mjs`),而非本仓库地板。规则(全程 fail-closed):仅限干净的 `git -C <dir> <sub>` 形态;`push` 排除(不可逆外部);`destructive` 由效果地板先于 git 分支拦截(`git clean` 仍拒,不引入第二个 git 破坏性分类);仅当目标 git-common-dir 与本仓库不同才算外部(linked worktree 别名本仓库 git,永不外部)。目标状态读取复用 sibling-worktree 的 digest 校验快照读(无锁、best-effort):无状态/terminal → 放行;活动/挂起且属本会话 → 放行;他人活动任务 → 拒并点名那个仓库的 task;快照撕裂/不可读 → 拒。`foreignWriteDecision` 新增 `sessionId` 参数(判定 repoB 归属),`application.mjs` 传入。测试扩为 19 个(新增 Part 4 六个:无状态放行、push/clean 仍拒、self/子目录非外部、他人任务拒、self 任务放行、terminal 放行)。
+**阶段 3(`git -C` 跨仓库代查)**:外部会话的非只读 `git -C <dir> <subcommand>` 改由**目标仓库自身的 taskloop 状态**裁决(`gitExternalDelegation`,`历史监督运行时`),而非本仓库地板。规则(全程 fail-closed):仅限干净的 `git -C <dir> <sub>` 形态;`push` 排除(不可逆外部);`destructive` 由效果地板先于 git 分支拦截(`git clean` 仍拒,不引入第二个 git 破坏性分类);仅当目标 git-common-dir 与本仓库不同才算外部(linked worktree 别名本仓库 git,永不外部)。目标状态读取复用 sibling-worktree 的 digest 校验快照读(无锁、best-effort):无状态/terminal → 放行;活动/挂起且属本会话 → 放行;他人活动任务 → 拒并点名那个仓库的 task;快照撕裂/不可读 → 拒。`foreignWriteDecision` 新增 `sessionId` 参数(判定 repoB 归属),`application.mjs` 传入。测试扩为 19 个(新增 Part 4 六个:无状态放行、push/clean 仍拒、self/子目录非外部、他人任务拒、self 任务放行、terminal 放行)。
 
 **阶段 2(拒绝文案三分类 + 宿主中立)**:`foreignAnalysisFailure`/`foreignWriteDecision` 的拒绝语按三类重写(语义不变,仅文案):① 受保护资源(envelope 冲突点名任务 id + 文件,给 join/worktree;控制面写不提 join)、② 作用域不可解析("cannot resolve the write target",给绝对路径/拆分命令的可行动建议,不再是笼统禁止)、③ 宿主级风险地板(install/publish/destructive/remote-exec 等点名风险与授权,不再归因"foreign session ... denied")。`application.mjs:195/199` 的 "Codex hook session_id" 改为宿主中立 "host hook session id"。同提交更新 `taskloop.test.mjs`(Codex 文案、`not provable`→`resolve`)与 `foreign-session-scope.test.mjs`(UNPROVABLE 正则);`AGENTS.md` 记录三分类为 deliberate interface change。
 
 **阶段 1 的机制在实施时被修正**:原计划假设"改一行 `unresolvedCommandWrite` narrowing"即可,但实测发现 `local.targets`(`localTargetsFromStructure`)只收集 shell 重定向目标,`cp`/`rm`/`mv`/`tee`/`mkdir`/`touch` 的**操作数目的地从不被解析**(`local.write=true` 但 `targets=[]`)。因此一行改动对它们是 no-op。真正的修法是**新增一个操作数目的地解析器**(经用户确认按新范围走):
 
-- `lib/supervision.mjs`:新增 `writeToolProfile`/`extractWriteOperands`/`localWriteDestinations`,把六个 `LOCAL_WRITE_TOOLS` 的目的地按各自 getopt 语法解析并沿 cd 追踪解析为路径;任何无法确定完整目的地的形态(递归 `cp -r`/`-a`、`sed -i`、含 value/targetdir 字母的短簇、`-t` 缺值)返回 `enumerable:false` → **fail-closed 拒绝**。
+- `历史监督运行时`:新增 `writeToolProfile`/`extractWriteOperands`/`localWriteDestinations`,把六个 `LOCAL_WRITE_TOOLS` 的目的地按各自 getopt 语法解析并沿 cd 追踪解析为路径;任何无法确定完整目的地的形态(递归 `cp -r`/`-a`、`sed -i`、含 value/targetdir 字母的短簇、`-t` 缺值)返回 `enumerable:false` → **fail-closed 拒绝**。
 - 新增 `envelopeRegionContains`(+`literalGlobPrefix`):捕获"写入 envelope 目录本身"这一泄漏方向(`cp x repoA/src` 落入 `src/**`),文件级 `insideEnvelope` 看不到。
 - `foreignWriteDecision`:用 `commandWriteDestinations` 合并目的地,`!resolved` fail-closed;对所有已解析目的地追加**控制面守卫**(`controlPlaneRoots`),使外部会话 `cp` 进 `.taskloop`/`.git` 仍拒。新增 `home` 参数,`application.mjs` 传入。
 - 血缘范围最小化:未改 `writeFileTargets`,故 owner 路径、全局 control-plane、untracked 追踪行为不变(owner 用 `cp` 逃逸 envelope 仍是既有行为,列为后续项)。
@@ -51,7 +51,7 @@
 
 ## TL;DR
 
-- 根因不是"效果类拒绝先于归属"一条,而是两条:效果类地板无视目标归属(`lib/supervision.mjs:1529-1540`),加上外部会话对 shell 本地写的一票否决——已解析的绝对路径目标不参与放行判断(`lib/supervision.mjs:1555-1557`)。后者才是 `rm`/`cp` 跨仓库被拒的直接机制。
+- 根因不是"效果类拒绝先于归属"一条,而是两条:效果类地板无视目标归属(`历史监督运行时:1529-1540`),加上外部会话对 shell 本地写的一票否决——已解析的绝对路径目标不参与放行判断(`历史监督运行时:1555-1557`)。后者才是 `rm`/`cp` 跨仓库被拒的直接机制。
 - 修正核心是**对齐而非放松**:让全部写目标可安全解析的 shell 命令,走文件工具(Write/Edit)今天已经在走的 canonical 目标 + envelope 相交路径。不新增任何信任面。
 - 四个阶段,严格顺序:阶段 0 回归基线(含对抗不变量,先行合入)→ 阶段 1 目标同权 → 阶段 2 拒绝文案三分类与宿主中立 → 阶段 3(可选、单独决策)`git -C` 跨仓库代查。
 - 不做:同仓库多任务资源级并行(现答案是 git worktree)、放松 install/publish 等效果类全局地板、同文件区域并行。
@@ -101,7 +101,7 @@ fixture:repoA 含活动任务(envelope `src/**`,owner sessA),sessB 从 repoA 触
 1. **不变量(必须现在就绿、永远绿)**——先于阶段 1 合入:
    - `cp x repoB/../repoA/src/a.txt`(`..` 穿越)→ envelope 拒;
    - 经 repoB 内符号链接指向 repoA envelope 的写 → envelope 拒;
-   - 大小写折叠变体(`SRC/A.TXT`,darwin/win32 fold,`lib/supervision.mjs:1466`)→ envelope 拒;
+   - 大小写折叠变体(`SRC/A.TXT`,darwin/win32 fold,`历史监督运行时:1466`)→ envelope 拒;
    - `cd repoB && cp a b`(目录切换 + 相对目标)→ 拒(:1552-1554 保留);
    - `$VAR`/glob/反引号目标(`pathMeta`,:1467)→ 拒;
    - 无目标写形(`sed -i` 类)→ 拒;
@@ -113,7 +113,7 @@ fixture:repoA 含活动任务(envelope `src/**`,owner sessA),sessB 从 repoA 触
 
 ## 阶段 1:目标同权(P1,core)
 
-唯一改动点:`lib/supervision.mjs:1555-1557` 的 `unresolvedCommandWrite`。现为:
+唯一改动点:`历史监督运行时:1555-1557` 的 `unresolvedCommandWrite`。现为:
 
 ```js
 const unresolvedCommandWrite = call.commands.some(({ analysis }) => analysis.local.write);
@@ -143,7 +143,7 @@ const unresolvedCommandWrite = call.commands.some(({ analysis }) =>
 
 | 类别 | 现文案(位置) | 改后要点 |
 | --- | --- | --- |
-| ①任务资源冲突 | `cannot write inside the task envelope: <file>`(supervision.mjs:1564) | 已达标,补任务 id |
+| ①任务资源冲突 | `cannot write inside the task envelope: <file>`(历史监督运行时:1564) | 已达标,补任务 id |
 | ②作用域无法解析 | `write target is not provable` / `not safely resolvable` / `depends on a shell directory change`(:1553、:1557、:1560) | 明示是解析限制,建议绝对路径或拆分命令,不再归因"外部会话禁止" |
 | ③宿主级风险地板 | `foreign session package installation is denied` 等(:1529-1540) | 说明是宿主级安全地板,与工作区会话绑定无关 |
 

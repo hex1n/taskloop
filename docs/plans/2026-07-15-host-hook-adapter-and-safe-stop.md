@@ -96,7 +96,7 @@ review_budget: 实施前 1 次 plan-review；release candidate 1 次完整 code 
 
 1. 保持 dependency-free Node.js CLI。
 2. `lib/application.mjs` 仍是唯一 assembly；leaf module 只能 import `lib/prims.mjs`。
-3. task lifecycle mutation 继续由 `lib/task-engine.mjs` 决定，host adapter 不读取或修改 task state。
+3. task lifecycle mutation 继续由 `历史任务状态运行时` 决定，host adapter 不读取或修改 task state。
 4. PreToolUse 写保护必须 fail closed；Stop transport 在未知/不安全 host 上必须 release-safe，不能再次损坏会话。
 5. Driver 和 scheduler 继续在仓库外；本方案不伪造 Codex 的下一轮。
 6. 用户拥有的 `~/.codex/hooks.json`、`config.toml` 或 Claude 配置不能被安装器静默覆盖。

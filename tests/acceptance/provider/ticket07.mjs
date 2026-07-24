@@ -13,7 +13,7 @@ const files = [
 const required = [
   "lib/git-authority-provider.mjs",
   "lib/filesystem-authority-provider.mjs",
-  "lib/task-engine.mjs",
+  "lib/authority-state.mjs",
   ".github/workflows/test.yml",
   "tests/filesystem-detached-authority.test.mjs",
 ];

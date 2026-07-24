@@ -2,7 +2,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 
 const files = ["tests/authority-transaction.test.mjs", "tests/git-main-authority.test.mjs", "tests/provider-installer.test.mjs"];
-const required = ["lib/git-authority-provider.mjs", "lib/task-engine.mjs", ".github/workflows/test.yml", "tests/git-main-authority.test.mjs"];
+const required = ["lib/git-authority-provider.mjs", "lib/authority-state.mjs", ".github/workflows/test.yml", "tests/git-main-authority.test.mjs"];
 if (required.some((target) => !fs.existsSync(target))) {
   process.stdout.write("WORKLOOP_CRITERION: ticket03 current-format Git provider tracer bullet is absent\n");
   process.exit(3);

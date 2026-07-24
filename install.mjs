@@ -2,7 +2,6 @@
 // Install workloop's dependency-free runtime and loop skills.
 
 import { createHash, randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -51,6 +50,20 @@ const STOP_RECIPE_TIMEOUT_SECONDS = hookSourceInteger("STOP_RECIPE_TIMEOUT_SECON
 const ACTIONS = [];
 const INSTALL_LOCK_TIMEOUT_MS = 30_000;
 const INSTALL_LOCK_STALE_MS = 5 * 60_000;
+const RUNTIME_PATHS = Object.freeze([
+  "bin/workloop.mjs",
+  "lib/authority-outcome-projection.mjs",
+  "lib/authority-state.mjs",
+  "lib/authority-tail-recovery.mjs",
+  "lib/authority-transaction.mjs",
+  "lib/criterion.mjs",
+  "lib/filesystem-authority-provider.mjs",
+  "lib/git-authority-provider.mjs",
+  "lib/hook-targets.mjs",
+  "lib/host-hooks.mjs",
+  "lib/prims.mjs",
+  "lib/provider-application.mjs",
+]);
 
 function plan(kind, detail) {
   ACTIONS.push([kind, detail]);
@@ -84,10 +97,11 @@ function walkFiles(root) {
 }
 
 function runtimeFiles(repo) {
-  return [path.join(repo, "bin"), path.join(repo, "lib")]
-    .flatMap((dir) => walkFiles(dir))
-    .map((file) => ({ file, relative: path.relative(repo, file).replace(/\\/g, "/") }))
-    .sort((a, b) => a.relative.localeCompare(b.relative));
+  return RUNTIME_PATHS.map((relative) => ({ file: path.join(repo, relative), relative }))
+    .map((entry) => {
+      if (!fs.statSync(entry.file).isFile()) throw new Error(`current runtime file is missing: ${entry.relative}`);
+      return entry;
+    });
 }
 
 function runtimeHash(files) {
@@ -1289,36 +1303,6 @@ export function installWorkloop(repo, home, dry = false) {
   return dry ? install() : withInstallLock(home, install);
 }
 
-function registerCommitDistribution(repo, dry) {
-  if (!exists(path.join(repo, ".git")) || !exists(path.join(repo, "hooks", "post-commit"))) return;
-  const expectedHooksPath = path.resolve(repo, "hooks");
-  const samePath = (a, b) => {
-    const left = path.normalize(a);
-    const right = path.normalize(b);
-    return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
-  };
-  let current = "";
-  try {
-    current = execFileSync("git", ["-C", repo, "config", "--get", "core.hooksPath"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  } catch {
-    current = "";
-  }
-  const currentHooksPath = current ? path.resolve(repo, current) : "";
-  if (current === "hooks" || (currentHooksPath && samePath(currentHooksPath, expectedHooksPath))) {
-    plan("ok", current === "hooks" ? "core.hooksPath=hooks" : `core.hooksPath=${current}`);
-    return;
-  }
-  if (current) {
-    plan("error", `core.hooksPath is '${current}'; not replacing a foreign hook directory`);
-    return;
-  }
-  plan("update", "git config core.hooksPath hooks");
-  if (!dry) execFileSync("git", ["-C", repo, "config", "core.hooksPath", "hooks"]);
-}
-
 function main() {
   const args = process.argv.slice(2);
   const dry = args.includes("--dry-run");
@@ -1329,7 +1313,6 @@ function main() {
   }
   ACTIONS.length = 0;
   const installed = installWorkloop(SOURCE, HOME, dry);
-  registerCommitDistribution(SOURCE, dry);
   const bindCodex = () => configureCodexLedgerBinding(HOME, { configure: configureCodex, dry });
   if (configureCodex && !dry) withInstallLock(HOME, bindCodex);
   else bindCodex();

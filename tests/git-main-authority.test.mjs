@@ -99,9 +99,93 @@ test("current Git tracer selects containment and replays after disposable projec
   const rebuilt = json(run(["status", "--target", targets[2]], { cwd: fx.root }));
   assert.equal(rebuilt.task.task_id, opened.task.task_id);
   assert.equal(rebuilt.authority_sequence, beforeLedger.records.length);
-  assert.equal(fs.existsSync(opened.snapshot_path), true);
-  assert.equal(fs.existsSync(opened.outcome_path), true);
+  assert.equal(fs.existsSync(opened.snapshot_path), false);
+  assert.equal(fs.existsSync(opened.outcome_path), false);
   assert.deepEqual(json(run(["audit", "--target", targets[3]], { cwd: fx.root })).task, beforeAudit.task);
+});
+
+test("query verbs observe authority and collisions without changing durable bytes", (t) => {
+  const fx = fixture(t, "read-only-queries");
+  const opened = openTask(fx, "read-only-query-open");
+  const authorityPath = path.join(opened.authority_root, "authority.jsonl");
+  const observedPaths = [authorityPath, opened.locator_path, opened.snapshot_path, opened.outcome_path, opened.outcome_cursor_path];
+  const durableState = () => Object.fromEntries(observedPaths.map((file) => {
+    const stat = fs.statSync(file, { bigint: true });
+    return [file, { bytes: fs.readFileSync(file).toString("base64"), mtime_ns: stat.mtimeNs.toString() }];
+  }));
+  const before = durableState();
+
+  for (const verb of ["status", "audit", "ledger", "tasks"]) {
+    const result = json(run([verb, "--target", path.join(fx.repo, "src", "tracked.txt")], { cwd: fx.root }));
+    assert.equal(result.authority_id, opened.authority_id);
+  }
+  assert.deepEqual(durableState(), before);
+
+  const copied = path.join(fx.root, "copied-query-repo");
+  fs.cpSync(fx.repo, copied, { recursive: true });
+  const copiedAuthority = path.join(copied, ".git", "workloop", "authority.jsonl");
+  const copiedBefore = fs.readFileSync(copiedAuthority);
+  const collision = json(run(["status", "--target", path.join(copied, "src", "tracked.txt")], { cwd: fx.root }));
+  assert.equal(collision.routing_reason, "attachment_collision");
+  assert.deepEqual(fs.readFileSync(copiedAuthority), copiedBefore);
+});
+
+test("torn authority tails fail closed until exact user-authorized recovery is receipted", (t) => {
+  const fx = fixture(t, "torn-authority");
+  const opened = openTask(fx, "torn-authority-open");
+  const authorityPath = path.join(opened.authority_root, "authority.jsonl");
+  const validEndOffset = fs.statSync(authorityPath).size;
+  const tail = Buffer.from('{"partial":"authority-frame"');
+  fs.appendFileSync(authorityPath, tail);
+
+  const blocked = run(["status", "--target", path.join(fx.repo, "src", "tracked.txt")], { cwd: fx.root });
+  assert.equal(blocked.status, 2);
+  assert.match(blocked.stderr, /torn tail/);
+
+  const denied = run([
+    "recover-torn-tail", "--target", fx.repo, "--command-id", "recover-authority-tail",
+    "--expect-valid-end-offset", String(validEndOffset), "--expect-tail-digest", sha256Hex(tail),
+    "--reason", "operator verified partial tail", "--granted-by", "self",
+  ], { cwd: fx.root });
+  assert.equal(denied.status, 2, denied.stderr || denied.stdout);
+  assert.deepEqual(fs.readFileSync(authorityPath).subarray(validEndOffset), tail);
+
+  const recovered = json(run([
+    "recover-torn-tail", "--target", fx.repo, "--command-id", "recover-authority-tail",
+    "--expect-valid-end-offset", String(validEndOffset), "--expect-tail-digest", sha256Hex(tail),
+    "--reason", "operator verified partial tail", "--granted-by", "user",
+  ], { cwd: fx.root }));
+  assert.equal(recovered.repaired, true);
+  assert.equal(recovered.replayed, false);
+  const ledger = json(run(["ledger", "--target", fx.repo], { cwd: fx.root }));
+  assert.equal(ledger.records.at(-1).kind, "authority_tail_recovered");
+  assert.equal(ledger.records.at(-1).payload.discarded_sha256, sha256Hex(tail));
+  assert.equal(json(run(["status", "--target", path.join(fx.repo, "src", "tracked.txt")], { cwd: fx.root })).routable, true);
+});
+
+test("authority export is a maintenance-locked, byte-exact publication outside live roots", (t) => {
+  const fx = fixture(t, "authority-export");
+  const opened = openTask(fx, "authority-export-open");
+  const authorityPath = path.join(opened.authority_root, "authority.jsonl");
+  const liveBytes = fs.readFileSync(authorityPath);
+  const denied = run([
+    "export-authority", "--target", fx.repo, "--output", path.join(fx.repo, "export"),
+    "--reason", "must remain outside live roots", "--granted-by", "user",
+  ], { cwd: fx.root });
+  assert.equal(denied.status, 2, denied.stderr || denied.stdout);
+  assert.equal(fs.existsSync(path.join(fx.repo, "export")), false);
+
+  const destination = path.join(fx.root, "authority-export");
+  const exported = json(run([
+    "export-authority", "--target", fx.repo, "--output", destination,
+    "--reason", "retain authority independently", "--granted-by", "user",
+  ], { cwd: fx.root }));
+  assert.equal(exported.exported, true);
+  assert.deepEqual(fs.readFileSync(path.join(destination, "authority.jsonl")), liveBytes);
+  const manifest = JSON.parse(fs.readFileSync(path.join(destination, "manifest.json"), "utf8"));
+  assert.equal(manifest.authority_id, opened.authority_id);
+  assert.equal(manifest.authority_sha256, sha256Hex(liveBytes));
+  assert.equal(manifest.granted_by, "user");
 });
 
 test("hard cut exposes only provider Contract verbs and never dispatches the temporary current-* aliases", (t) => {
@@ -114,6 +198,29 @@ test("hard cut exposes only provider Contract verbs and never dispatches the tem
   assert.match(oldRuntime.stderr, /only the provider Contract/);
   const opened = openTask(fx, "hard-cut-open");
   assert.equal(opened.provider, "git_common");
+});
+
+test("hard cut refuses incompatible state until an exact opaque archive proves the current bytes", (t) => {
+  const fx = fixture(t, "hard-cut-state");
+  const legacy = path.join(fx.repo, ".workloop");
+  fs.mkdirSync(legacy);
+  const legacyFile = path.join(legacy, "events-v3.jsonl");
+  fs.writeFileSync(legacyFile, "legacy authority\n");
+
+  const refused = run(["open", "--target", path.join(fx.repo, "src", "future.txt"), "--goal", "must archive first", "--write-root", "src", "--command-id", "hard-cut-refused", ...OPEN_PROVENANCE], { cwd: fx.root });
+  assert.equal(refused.status, 2);
+  assert.match(refused.stderr, /archive-incompatible-state/);
+  assert.equal(fs.existsSync(path.join(fx.commonDir, "workloop", "authority.jsonl")), false);
+
+  const archived = json(run(["archive-incompatible-state", "--target", fx.repo, "--reason", "preserve exact incompatible bytes", "--granted-by", "user"], { cwd: fx.root }));
+  assert.equal(fs.existsSync(path.join(archived.archive_path, "manifest.json")), true);
+  const opened = json(run(["open", "--target", path.join(fx.repo, "src", "future.txt"), "--goal", "archived legacy state", "--write-root", "src", "--command-id", "hard-cut-opened", ...OPEN_PROVENANCE], { cwd: fx.root }));
+  assert.equal(opened.routable, true);
+
+  fs.appendFileSync(legacyFile, "changed after archive\n");
+  const staleArchive = run(["status", "--target", path.join(fx.repo, "src", "future.txt")], { cwd: fx.root });
+  assert.equal(staleArchive.status, 2);
+  assert.match(staleArchive.stderr, /archive-incompatible-state/);
 });
 
 test("incompatible repository artifacts can only be copied opaquely with explicit user provenance", (t) => {
@@ -147,13 +254,18 @@ test("Git outcome shards are per-authority caches: one corrupt or missing shard 
   fs.writeFileSync(leftOpen.outcome_path, "not-json\n");
   fs.rmSync(leftOpen.outcome_cursor_path, { force: true });
   const rebuilt = json(run(["status", "--target", path.join(left.repo, "src", "future.txt")], { cwd: left.root }));
-  assert.equal(JSON.parse(fs.readFileSync(rebuilt.outcome_path, "utf8")).authority_id, leftOpen.authority_id);
-  assert.equal(JSON.parse(fs.readFileSync(rebuilt.outcome_cursor_path, "utf8")).source_sequence, rebuilt.authority_sequence);
+  assert.equal(fs.readFileSync(leftOpen.outcome_path, "utf8"), "not-json\n");
+  assert.equal(fs.existsSync(leftOpen.outcome_cursor_path), false);
+  const suspended = json(run(["suspend", "--target", path.join(left.repo, "src", "future.txt"), "--task-id", leftOpen.task.task_id, "--command-id", "outcome-left-suspend", "--reason", "rebuild after explicit mutation", "--granted-by", "self"], { cwd: left.root }));
+  assert.equal(JSON.parse(fs.readFileSync(suspended.outcome_path, "utf8")).authority_id, leftOpen.authority_id);
+  assert.equal(JSON.parse(fs.readFileSync(suspended.outcome_cursor_path, "utf8")).source_sequence, suspended.authority_sequence);
   assert.deepEqual(json(run(["ledger", "--target", right.repo])).records, rightLedger);
   assert.equal(fs.readFileSync(rightOpen.outcome_path, "utf8"), rightOutcome);
-  fs.rmSync(rebuilt.outcome_path, { force: true });
+  fs.rmSync(leftOpen.outcome_path, { force: true });
   const replayed = json(run(["status", "--target", path.join(left.repo, "src", "future.txt")], { cwd: left.root }));
-  assert.equal(JSON.parse(fs.readFileSync(replayed.outcome_path, "utf8")).authority_id, leftOpen.authority_id);
+  assert.equal(replayed.task, null);
+  assert.equal(replayed.routing_reason, "task_scope_unclaimed");
+  assert.equal(fs.existsSync(leftOpen.outcome_path), false);
 });
 
 test("append and locator conflicts never fabricate a successful format open", (t) => {
@@ -254,7 +366,7 @@ test("current open requires replayable command provenance and disposable project
   assert.match(opened.warnings[1], /outcome projection deferred/);
   const status = json(run(["status", "--target", path.join(degraded.repo, "src", "future.txt")]));
   assert.equal(status.routable, true);
-  assert.equal(status.warnings.length, 2);
+  assert.deepEqual(status.warnings, []);
 });
 
 test("target-first routing covers canonical aliases, case, nesting, external and control targets", (t) => {
@@ -296,7 +408,7 @@ test("target-first routing covers canonical aliases, case, nesting, external and
 
 test("replay rejects Git certification without its matching clean commit receipt", (t) => { const fx = fixture(t, "forged-certification"); const opened = openTask(fx, "forged-certification-open"); const ledger = json(run(["ledger", "--target", fx.repo])).records; const prior = ledger.at(-1); const forged = { authority_schema_version: 1, sequence: prior.sequence + 1, previous_digest: prior.record_digest, record_id: randomUUID(), command_id: "forged-certification", kind: "task_certified", payload: { task_id: opened.task.task_id, attachment_id: opened.attachment_id, session_id: "session-main", prepared_sequence: prior.sequence, attachment_final_digest: opened.task.attachment_final_digest, criterion_digest: sha256Hex("criterion"), commit_oid: "0123456789012345678901234567890123456789", reason: "forged", granted_by: "self" } }; forged.record_digest = sha256Hex(canonicalJson(forged)); fs.appendFileSync(path.join(fx.commonDir, "workloop", "authority.jsonl"), canonicalJson(forged) + "\n"); const rejected = run(["status", "--target", fx.repo]); assert.equal(rejected.status, 2); assert.match(rejected.stderr, /task certification/); });
 
-test("persisted schema and task-engine transitions reject hash-valid invalid authority", (t) => {
+test("persisted schema and authority-state transitions reject hash-valid invalid authority", (t) => {
   const transitionFx = fixture(t, "invalid-transition");
   const opened = openTask(transitionFx, "transition-open");
   const ledger = json(run(["ledger", "--target", transitionFx.repo])).records;
@@ -351,7 +463,7 @@ test("persisted schema and task-engine transitions reject hash-valid invalid aut
 
 test("current Git provider is a new-Contract leaf and old authority is never an input", () => {
   const provider = fs.readFileSync(path.join(ROOT, "lib", "git-authority-provider.mjs"), "utf8");
-  assert.deepEqual([...provider.matchAll(/from "([^"]+)"/g)].map((match) => match[1]).filter((source) => source.startsWith(".")), ["./prims.mjs"]);
+  assert.deepEqual([...provider.matchAll(/from "([^"]+)"/g)].map((match) => match[1]).filter((source) => source.startsWith(".")), ["./prims.mjs", "./authority-tail-recovery.mjs"]);
   assert.doesNotMatch(provider, /EVENT_STORE_FILE|task-store|event-store|\.workloop\/events|migrate|fallback|dual[-_ ]?(?:read|write)/i);
   assert.doesNotMatch(provider, /withLock\("outcome"/);
   const application = fs.readFileSync(path.join(ROOT, "lib", "provider-application.mjs"), "utf8");
@@ -362,10 +474,12 @@ test("current Git provider is a new-Contract leaf and old authority is never an 
   assert.match(scripts.test, /tests\/git-main-authority\.test\.mjs/);
   assert.match(scripts["test:matrix"], /tests\/git-main-authority\.test\.mjs/);
   const prims = fs.readFileSync(path.join(ROOT, "lib", "prims.mjs"), "utf8");
-  const engine = fs.readFileSync(path.join(ROOT, "lib", "task-engine.mjs"), "utf8");
+  const engine = fs.readFileSync(path.join(ROOT, "lib", "authority-state.mjs"), "utf8");
   assert.match(prims, /CURRENT_AUTHORITY_EVENT_PAYLOAD_FIELDS/);
   assert.match(engine, /function evolveCurrentAuthority/);
   assert.match(engine, /function assertCurrentAuthorityProjection/);
+  assert.equal(fs.existsSync(path.join(ROOT, "lib", "task-engine.mjs")), false);
+  assert.equal(fs.existsSync(path.join(ROOT, "lib", "supervision.mjs")), false);
   const workflow = fs.readFileSync(path.join(ROOT, ".github", "workflows", "test.yml"), "utf8");
   assert.match(workflow, /Provider authority suite[\s\S]*npm test/);
   assert.match(workflow, /Ticket acceptance suite[\s\S]*verify-provider-tickets\.mjs/);

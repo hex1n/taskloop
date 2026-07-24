@@ -15,7 +15,7 @@
 | `docs/plans/2026-07-14-schema-v3-event-sourcing.md` | 冻结 SHA-256 `7989bdbd061165efb23618a52c7819d61db29d9449a2549ea2b24508ca1dfcf0` | A/C/R/T/W/P Oracle、hard cutover 与回滚边界 |
 | `lib/application.mjs` | `loadV3Authority`, `commitTaskCommand`, `transcriptRange`, CLI dispatch | 生产命令、Hook、事务编排、authority discriminator |
 | `lib/event-store.mjs` | `buildRecord`, `commitRecord`, `readEventStore`, `auditEventStore` | JSONL framing、SHA-256 链、fsync、tail recovery、audit |
-| `lib/task-engine.mjs` | `decide`, `evolve`, `evolveAll`, `assertV3TaskProjection` | 纯命令决策、事件归约、schema-v3 约束 |
+| `历史任务状态运行时` | `decide`, `evolve`, `evolveAll`, `assertV3TaskProjection` | 纯命令决策、事件归约、schema-v3 约束 |
 | `lib/task-store.mjs` | snapshot、archive、task lock | disposable snapshot、raw archive、并发互斥 |
 | `lib/outcome-projector.mjs` | `syncOutcomeRecords`, `auditOutcomeProjection` | HOME best-effort projection、去重、重建 |
 | `install.mjs` | runtime 4 manifest/journal/shim activation | 原子安装、failpoint 收敛、拒绝 contract 3 rollback |

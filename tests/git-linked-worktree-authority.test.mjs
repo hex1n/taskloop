@@ -107,10 +107,20 @@ test("main and linked worktrees share authority while target routing preserves a
   assert.equal(moved.attachment.observed_worktree_root, movedCanonical);
 
   fs.rmSync(moved.snapshot_path, { force: true });
-  fs.rmSync(moved.outcome_path, { force: true });
+  fs.rmSync(linked.outcome_path, { force: true });
   const replayed = repositoryTasks(fx);
   assert.equal(replayed.repository_tasks.length, 2);
   assert.equal(replayed.repository_tasks.find((item) => item.attachment_id === linked.attachment_id).task.task_id, linked.task.task_id);
+  assert.equal(fs.existsSync(moved.snapshot_path), false);
+  assert.equal(fs.existsSync(linked.outcome_path), false);
+
+  const rebuilt = json(run([
+    "join", "--target", path.join(movedRoot, "src", "tracked.txt"), "--task-id", linked.task.task_id,
+    "--command-id", "join-moved-replay", "--reason", "rebuild after explicit mutation", "--granted-by", "self",
+  ], { cwd: fx.root, env: { ...process.env, WORKLOOP_SESSION_ID: "session-moved-replay" } }));
+  assert.equal(rebuilt.task.task_id, linked.task.task_id);
+  assert.equal(fs.existsSync(rebuilt.snapshot_path), true);
+  assert.equal(fs.existsSync(rebuilt.outcome_path), true);
 });
 
 test("remove, prune, and same-path recreation retain old tasks without reusing attachment identity", (t) => {

@@ -20,7 +20,7 @@ const REQUIRED_CELLS = Object.freeze([
 
 const SOURCE_PATHS = Object.freeze([
   TRUSTED_WORKFLOW_PATH,
-  "acceptance-multi-root-authority-gate.mjs",
+  "spikes/multi-root-authority/acceptance-gate.mjs",
   "spikes/multi-root-authority/adapter.mjs",
   "spikes/multi-root-authority/hook-cli.mjs",
   "spikes/multi-root-authority/receipt-cli.mjs",

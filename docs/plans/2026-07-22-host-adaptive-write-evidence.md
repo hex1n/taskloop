@@ -364,7 +364,7 @@ reconcile artifact
 
 - `lib/prims.mjs`：Contract 6 event payload fields、capability enums。
 - `lib/event-store.mjs`：持久化 record contracts。
-- `lib/task-engine.mjs`：新 decider/reducer、projection、budget/closure 语义。
+- `历史任务状态运行时`：新 decider/reducer、projection、budget/closure 语义。
 - `lib/application.mjs`：Pre/Post dispatch、reconcile/criterion transaction。
 - `lib/host-hooks.mjs`：Post decode/encode、profile capability、recipe。
 - `lib/criterion.mjs` / `lib/task-store.mjs`：复用 fingerprint/checkpoint 与 snapshot contract。

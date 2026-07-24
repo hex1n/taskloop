@@ -45,7 +45,7 @@ change, with byte-exact hook protocol output untouched.
 
 - `lib/event-store.mjs` `PAYLOAD_CONTRACTS.criterion_observed.source`:
   `enum:open|stop|achieve` → `enum:open|stop|achieve|cli_verify`.
-- `lib/task-engine.mjs` witness `source_event` validation set gains
+- `历史任务状态运行时` witness `source_event` validation set gains
   `cli_verify`.
 - `tests/fixtures/runtime-contract-5.mjs`: both frozen enum spellings updated —
   the fixture exists to make schema drift explicit, and this document is that

@@ -53,8 +53,8 @@ Anthropic 的 agent loop 定义为 "gather context → take action → verify wo
 以下机制在本次全部 10 份来源中均无对应物：
 
 1. **出生即红**：`open` 拒绝已绿判据（`lib/application.mjs:346-353`）。业界只要求"有可查判据"，无人要求判据先证明自己能分辨"没做"与"做完"。
-2. **判据输入指纹 + drift 拒关**：改测试不改代码 = "sensor 被挪动"，两扇门都拒绝（`lib/criterion.mjs:343-359`、`lib/task-engine.mjs:187-190`），只能 `amend --reason` 重新指纹，drift 事件永久留账。这是对 "checker theater" 的机器化处理，公开指南只有口头告诫。
-3. **判据溯源 + weak-close 闸门**：session 自写检查器（state-dir）标记为"作者给自己打分"，绿也不能自关，必须 fresh-context 评审或显式 `--provisional` 记账（`lib/criterion.mjs:263-268`、`lib/task-engine.mjs:144-148`、`lib/application.mjs:626-635`）。
+2. **判据输入指纹 + drift 拒关**：改测试不改代码 = "sensor 被挪动"，两扇门都拒绝（`lib/criterion.mjs:343-359`、`历史任务状态运行时:187-190`），只能 `amend --reason` 重新指纹，drift 事件永久留账。这是对 "checker theater" 的机器化处理，公开指南只有口头告诫。
+3. **判据溯源 + weak-close 闸门**：session 自写检查器（state-dir）标记为"作者给自己打分"，绿也不能自关，必须 fresh-context 评审或显式 `--provisional` 记账（`lib/criterion.mjs:263-268`、`历史任务状态运行时:144-148`、`lib/application.mjs:626-635`）。
 4. **tri-state adapter 协议**：exit 2 = "无法裁决" ≠ "失败"，使 vacuous pass / stale green / collapsed verdicts 不可表达（`skills/loop-core/ADAPTERS.md:24-32`）。
 5. **权限扩张溯源账**：self vs user 的 grant 记录 + `self_granted` 上账（`lib/application.mjs:240-268`），"自我授权了多少权力"成为可审计量。
 6. **open 也入账**：开而不收在账上可见（`skills/loop-core/REFERENCE.md:103`）——对应 12-factor "unify execution and business state"，审计粒度更细。
@@ -66,9 +66,9 @@ Anthropic 的 agent loop 定义为 "gather context → take action → verify wo
 |---|---|
 | hallucinated success | ✓✓ 唯一成功路径是 fresh green |
 | reward hacking | ✓✓ 指纹/溯源/weak-close 机制群 |
-| no-progress loop | ✓ 同签名×3 + A/B 交替检测（`lib/task-engine.mjs:226-245`） |
+| no-progress loop | ✓ 同签名×3 + A/B 交替检测（`历史任务状态运行时:226-245`） |
 | cost blowup | ✓ 四预算 + 账本 token 估计 |
-| compounding errors | 部分：attempts 死路清单（`lib/task-engine.mjs:58-81`）+ suspend |
+| compounding errors | 部分：attempts 死路清单（`历史任务状态运行时:58-81`）+ suspend |
 | context overflow | 归 host，刻意不做 |
 
 硬覆盖 4 项、记录 1 项、分层让出 1 项；公开工具中未见覆盖面更全者。
@@ -129,7 +129,7 @@ spike 缺陷经三批任务修复（P0-①②③、P1-③④⑤，均走 taskloo
 | # | 缺陷 | 终态 | 落点 |
 |---|---|---|---|
 | 1 | hookStop 挂起盲 | 闭 | 挂起任务的 Stop 直接放行，不烧轮次不开 episode（`lib/application.mjs` hookStopLocked 入口） |
-| 2 | rounds 超预算 | 闭 | 失败转移封顶于预算；封顶时 out_of_budget 优先于 stuck（`lib/task-engine.mjs`） |
+| 2 | rounds 超预算 | 闭 | 失败转移封顶于预算；封顶时 out_of_budget 优先于 stuck（`历史任务状态运行时`） |
 | 3 | untracked gate 拦仓库外写 | 闭 | deny 需本次调用有仓内可归因目标；仓库外/target-less 写只 nudge，实现追平自身声明契约（`lib/untracked.mjs`） |
 | 4 | untracked 归因投毒 | 闭（带声明残余） | 先前条目按盘上存在性剪枝 + 未展开 `$VAR` 目标不入账；残余：cd 后与真实仓库文件同名的碰撞需 cwd 追踪，记为已知缺口 |
 | 5 | 账本写失败静默 | 闭 | append 失败出一行 stderr（`taskloop: outcome ledger append failed`），修可见性不修恢复（`lib/outcome-ledger.mjs`） |

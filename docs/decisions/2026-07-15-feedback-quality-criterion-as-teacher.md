@@ -49,13 +49,13 @@
 
 ## 裁决 1（续）：真正的裁决——三处接线
 
-病灶精确且干净：`lib/task-engine.mjs:471` 的 `v3FailureSuspension(task, observation, atEpochMs)` **手上就有 `observation`**（:472 还用了 `observation.verdict`），里面带着 `execution.output_tail`。但 :485 造 failure 时：
+病灶精确且干净：`历史任务状态运行时:471` 的 `v3FailureSuspension(task, observation, atEpochMs)` **手上就有 `observation`**（:472 还用了 `observation.verdict`），里面带着 `execution.output_tail`。但 :485 造 failure 时：
 
 ```js
 return { reason: "stuck", failure: `same failure repeated ${STUCK_REPEATS} times`, next_action: "change the approach or inputs, then resume" };
 ```
 
-**判据的话就在参数里，函数把它扔了。** 且 `criterion_observed` 事件的 `failure_summary`（160 字符 tail）是**存了的**（`lib/task-engine.mjs:690`）——账本里有，只是没往 suspension judgment 里走。这不是「信息不存在」，是**信息在手上没接线**。
+**判据的话就在参数里，函数把它扔了。** 且 `criterion_observed` 事件的 `failure_summary`（160 字符 tail）是**存了的**（`历史任务状态运行时:690`）——账本里有，只是没往 suspension judgment 里走。这不是「信息不存在」，是**信息在手上没接线**。
 
 第一性根据一句话：**判据的身份（`source.value`）不是判据的话（`output_tail`）；`remaining` 要的是话，印的是身份。**
 
@@ -63,7 +63,7 @@ return { reason: "stuck", failure: `same failure repeated ${STUCK_REPEATS} times
 
 **落点（全在仓内，机制改动；具体措辞归执行 session）**：
 
-1. `lib/task-engine.mjs:485` 与 `:489` —— `v3FailureSuspension` 把手上的 `observation.execution.output_tail` 接进 judgment。
+1. `历史任务状态运行时:485` 与 `:489` —— `v3FailureSuspension` 把手上的 `observation.execution.output_tail` 接进 judgment。
 2. `lib/application.mjs:627` —— `remaining` 停印 `criterion.source.value`，改为「判据还没绿 + 它最后说的话」。判据**身份**归 status 的 `## Criterion` 节（`:561`）负责，不归 `remaining`。
 3. `lib/application.mjs:633` —— stuck hold message 带上判据的话，agent 被 block 时即刻知道病因，不必主动跑 status。
 
@@ -104,7 +104,7 @@ cmd.exe 层拒绝执行（命令行太长，判据脚本压根没跑起来）
 
 ## 迁移面 / 执行项（进 #04，本图 plan-not-do）
 
-1. **三处接线**（裁决 1）：`lib/task-engine.mjs:485/489`、`lib/application.mjs:627`、`lib/application.mjs:633`。仓内机制改动；不动 `judgment` 的 schema（`lib/event-store.mjs:77` 的 `{remaining, failure, next_action}` 三字段不变，只改内容），故不撞 `agent/schema-v3-event-sourcing` 分支。
+1. **三处接线**（裁决 1）：`历史任务状态运行时:485/489`、`lib/application.mjs:627`、`lib/application.mjs:633`。仓内机制改动；不动 `judgment` 的 schema（`lib/event-store.mjs:77` 的 `{remaining, failure, next_action}` 三字段不变，只改内容），故不撞 `agent/schema-v3-event-sourcing` 分支。
 
 ## 本记录不判定
 

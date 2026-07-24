@@ -7,7 +7,7 @@
 仓库基线：`e5ecad652f818f98f7f87eea1e752b8299fab950`  
 当前分支：`codex/stop-hook-liveness-root-fix`  
 决策：BUILD（来源：用户）  
-输入来源：父方案、仓库 `AGENTS.md`、当前工作树 diff、`lib/prims.mjs`、`lib/event-store.mjs`、`lib/task-engine.mjs`、`lib/application.mjs`、`lib/criterion.mjs`、`lib/host-hooks.mjs`、`install.mjs`、runtime/Hook/installer/Windows 测试与冻结 Contract 5 fixture
+输入来源：父方案、仓库 `AGENTS.md`、当前工作树 diff、`lib/prims.mjs`、`lib/event-store.mjs`、`历史任务状态运行时`、`lib/application.mjs`、`lib/criterion.mjs`、`lib/host-hooks.mjs`、`install.mjs`、runtime/Hook/installer/Windows 测试与冻结 Contract 5 fixture
 
 ## TL;DR
 
@@ -60,7 +60,7 @@
 
 - 每个工单先写失败测试，再实现；红绿循环可以发生在本地，但提交点必须全绿。
 - `lib/application.mjs` 仍是唯一 assembly；leaf module 只能 import `lib/prims.mjs`。
-- lifecycle mutation 只进入 `lib/task-engine.mjs`。
+- lifecycle mutation 只进入 `历史任务状态运行时`。
 - schema 变更必须在 `prims` payload fields、`event-store` persisted contracts、`task-engine` projection validators 三处同一提交完成。
 - repository 全量哈希在 task lock 外完成；lock 内只做 bounded membership/stat/recent-content revalidation。
 - `.git/` 与 `.workloop/` 不进入 artifact fingerprint；task/event authority 用现有 task revision、source cursor 与 event digest 单独绑定。
@@ -244,7 +244,7 @@ Contract 6 projection 新增：
 
 - `lib/prims.mjs`
 - `lib/event-store.mjs`
-- `lib/task-engine.mjs`
+- `历史任务状态运行时`
 - `lib/task-store.mjs`
 - `lib/outcome-projector.mjs`
 - `tests/fixtures/runtime-contract-6.mjs`
@@ -329,7 +329,7 @@ scope 规则：
 
 - `lib/criterion.mjs`
 - `lib/application.mjs`
-- `lib/task-engine.mjs`
+- `历史任务状态运行时`
 - `tests/workloop.test.mjs`
 - `tests/workloop-architecture.test.mjs`
 - `tests/event-store.test.mjs`
@@ -390,8 +390,8 @@ receipt 映射：
 
 - `lib/host-hooks.mjs`
 - `lib/application.mjs`
-- `lib/task-engine.mjs`
-- `lib/supervision.mjs`（仅复用 write-shaped/tool-family 分类，不复制分类器）
+- `历史任务状态运行时`
+- `历史监督运行时`（仅复用 write-shaped/tool-family 分类，不复制分类器）
 - `lib/evidence-ledger.mjs`
 - `tests/host-hooks.test.mjs`
 - `tests/workloop.test.mjs`
@@ -470,7 +470,7 @@ Closure hold 条件：
 建议修改：
 
 - `lib/application.mjs`
-- `lib/task-engine.mjs`
+- `历史任务状态运行时`
 - `lib/criterion.mjs`
 - `tests/workloop.test.mjs`
 - `tests/roadmap-e2e.test.mjs`

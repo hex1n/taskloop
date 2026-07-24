@@ -9,7 +9,7 @@
 
 **「够了」是判级的答案，不是记账的答案。**
 
-`machineRiskFloor` 的两条规模规则挂着 `&& risk === "routine"` 守卫（`lib/task-engine.mjs:130-131`，`main` 与 v3 分支逐字节相同）。守卫服务的是**判级**——已经抬起来的级不必再抬。但 `reasons` 是**记账**，守卫让它记成了「第一个够用的理由」，而不是「所有为真的理由」。
+`machineRiskFloor` 的两条规模规则挂着 `&& risk === "routine"` 守卫（`历史任务状态运行时:130-131`，`main` 与 v3 分支逐字节相同）。守卫服务的是**判级**——已经抬起来的级不必再抬。但 `reasons` 是**记账**，守卫让它记成了「第一个够用的理由」，而不是「所有为真的理由」。
 
 **票 11 自己就是这个缺陷的伤害实证**：整张票是由这个有损字段造出来的。
 
@@ -74,7 +74,7 @@ reachable: 0/10
 
 ## 决议 4（唯一建设项）：去掉 reasons 上的守卫
 
-`lib/task-engine.mjs:130-131` 的两条规则：
+`历史任务状态运行时:130-131` 的两条规则：
 
 ```js
 if (roots.size > 1 && risk === "routine") { risk = "substantial"; reasons.push("multiple_envelope_roots"); }
@@ -108,7 +108,7 @@ if ((task.evidence?.touched_files ?? []).length > 10) { risk = riskMax(risk, "su
 write_authorized: Object.freeze(["files"]),
 ```
 
-**v3 的事件流带着每一次写和它的 files。** fold 一遍即同时得到 `spent.writes`（数 `write_authorized` 事件，`task-engine.mjs:746`）与 `evidence.touched_files`（并集其 `files`，`:747`）。而 09 决议 3 已把 fold 裁给 runtime 的 `ledger --json`。
+**v3 的事件流带着每一次写和它的 files。** fold 一遍即同时得到 `spent.writes`（数 `write_authorized` 事件，`历史任务状态运行时:746`）与 `evidence.touched_files`（并集其 `files`，`:747`）。而 09 决议 3 已把 fold 裁给 runtime 的 `ledger --json`。
 
 在 v3 上加 `task_terminal.evidence` = **把 v3 刚废除的那个投影选择重新引进来**，且 `evidence` 这个名字在 v3 terminal payload 里**已被占用**（`not-needed --evidence` 的证据文本，`null|non-empty-string`）。
 

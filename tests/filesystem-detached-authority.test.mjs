@@ -33,6 +33,12 @@ function open(fx, { target = null, root = fx.root, id = "open", session = "files
   ], { session }));
 }
 function records(fx, authorityId) { return fs.readFileSync(path.join(fx.home, "authorities", authorityId, "authority.jsonl"), "utf8").trim().split("\n").map(JSON.parse); }
+function anchorDerivedAuthorityId(root) {
+  const stat = fs.statSync(fs.realpathSync.native(root), { bigint: true });
+  const anchor = sha256Hex(`${process.platform}:${stat.dev}:${stat.ino}:${stat.birthtimeNs}`);
+  const digest = sha256Hex(`filesystem-detached:${anchor}`).slice("sha256:".length);
+  return `${digest.slice(0, 8)}-${digest.slice(8, 12)}-4${digest.slice(13, 16)}-8${digest.slice(17, 20)}-${digest.slice(20, 32)}`;
+}
 
 test("explicit filesystem root creates a detached authority and locator-only root with partitioned lifecycle", (t) => {
   const fx = fixture(t, "open");
@@ -45,6 +51,7 @@ test("explicit filesystem root creates a detached authority and locator-only roo
 
   const alpha = open(fx, { id: "open-alpha", session: "session-alpha", writeRoot: "alpha" });
   assert.equal(alpha.provider, "filesystem_detached");
+  assert.notEqual(alpha.authority_id, anchorDerivedAuthorityId(fx.root));
   assert.equal(alpha.routable, true);
   assert.equal(fs.existsSync(path.join(fx.root, ".workloop-filesystem-root.jsonl")), true);
   assert.equal(fs.existsSync(path.join(fx.root, "authority.jsonl")), false);
@@ -76,6 +83,43 @@ test("explicit filesystem root creates a detached authority and locator-only roo
   assert.ok(ledger.records.some((record) => record.kind === "task_opened"));
 });
 
+test("filesystem root claims never route Workloop control paths", (t) => {
+  const fx = fixture(t, "control-plane");
+  const opened = open(fx, { id: "control-root-open", session: "control-session", writeRoot: "." });
+  assert.equal(opened.routable, true);
+  const controls = [
+    path.join(fx.root, ".workloop-filesystem-root.jsonl"),
+    path.join(fx.root, ".workloop", "events-v3.jsonl"),
+    path.join(fx.root, ".workloop-incompatible-archive", "opaque.txt"),
+  ];
+  for (const control of controls) {
+    const status = run(fx, ["status", "--target", control], { session: "control-session" });
+    assert.equal(status.status, 2, control);
+    assert.match(status.stderr, /control/i);
+  }
+});
+
+test("detached authority torn tails recover by exact authority selector and proof", (t) => {
+  const fx = fixture(t, "torn-tail");
+  const opened = open(fx, { id: "filesystem-torn-open", session: "torn-session", writeRoot: "src" });
+  const authorityPath = path.join(fx.home, "authorities", opened.authority_id, "authority.jsonl");
+  const validEndOffset = fs.statSync(authorityPath).size;
+  const tail = Buffer.from('{"partial":"detached-authority"');
+  fs.appendFileSync(authorityPath, tail);
+  const blocked = run(fx, ["status", "--authority", opened.authority_id], { session: "torn-session" });
+  assert.equal(blocked.status, 2);
+  assert.match(blocked.stderr, /torn tail/);
+
+  const recovered = json(run(fx, [
+    "recover-torn-tail", "--authority", opened.authority_id, "--command-id", "recover-detached-tail",
+    "--expect-valid-end-offset", String(validEndOffset), "--expect-tail-digest", sha256Hex(tail),
+    "--reason", "operator verified detached tail", "--granted-by", "user",
+  ], { session: "torn-session" }));
+  assert.equal(recovered.authority_id, opened.authority_id);
+  const ledger = json(run(fx, ["ledger", "--authority", opened.authority_id], { session: "torn-session" }));
+  assert.equal(ledger.records.at(-1).kind, "authority_tail_recovered");
+});
+
 test("certify achieves a filesystem task without a Git receipt", (t) => { const fx = fixture(t, "certify"); const opened = open(fx, { id: "certify-open", session: "certify-session", writeRoot: "src" }); fs.writeFileSync(path.join(fx.root, "check.mjs"), "process.exit(4);\n"); const certified = json(run(fx, ["certify", "--target", path.join(fx.root, "src", "future.txt"), "--task-id", opened.task.task_id, "--criterion-file", "check.mjs", "--command-id", "filesystem-certify", "--reason", "criterion satisfied", "--granted-by", "self"], { session: "certify-session" })); assert.equal(certified.task.lifecycle.outcome, "achieved"); assert.equal(certified.task.certification.commit_oid, null); });
 
 test("filesystem outcome shard rebuilds independently from its verified detached authority", (t) => {
@@ -84,7 +128,14 @@ test("filesystem outcome shard rebuilds independently from its verified detached
   assert.equal(path.dirname(opened.outcome_path), path.join(fx.home, "outcomes", opened.authority_id));
   fs.writeFileSync(opened.outcome_path, "corrupt\n");
   fs.rmSync(opened.outcome_cursor_path, { force: true });
-  const rebuilt = json(run(fx, ["status", "--target", path.join(fx.root, "src", "future.txt")], { session: "outcome-session" }));
+  const observed = json(run(fx, ["status", "--target", path.join(fx.root, "src", "future.txt")], { session: "outcome-session" }));
+  assert.equal(observed.authority_id, opened.authority_id);
+  assert.equal(fs.readFileSync(opened.outcome_path, "utf8"), "corrupt\n");
+  assert.equal(fs.existsSync(opened.outcome_cursor_path), false);
+  const rebuilt = json(run(fx, [
+    "join", "--target", path.join(fx.root, "src", "future.txt"), "--task-id", opened.task.task_id,
+    "--command-id", "outcome-join", "--reason", "rebuild after explicit mutation", "--granted-by", "self",
+  ], { session: "outcome-joined-session" }));
   const outcome = JSON.parse(fs.readFileSync(rebuilt.outcome_path, "utf8"));
   assert.equal(outcome.authority_id, opened.authority_id);
   assert.equal(outcome.provider, "filesystem_detached");

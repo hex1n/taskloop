@@ -34,9 +34,8 @@ const CLI = path.join(ROOT, "bin", "workloop.mjs");
 const OWNER_SESSION = "owner-session-A";
 const FOREIGN_SESSION = "foreign-session-B";
 
-// foldPath in lib/supervision.mjs keys case-insensitivity off the platform, so
-// the case-fold invariant only holds where the code assumes a case-insensitive
-// filesystem.
+// Case-folded target ownership is platform-dependent, so the invariant only
+// holds where the runtime assumes a case-insensitive filesystem.
 const CASE_INSENSITIVE_FS = process.platform === "win32" || process.platform === "darwin";
 const POSIX = process.platform !== "win32";
 
