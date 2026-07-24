@@ -13,7 +13,8 @@ const ROOT = path.resolve(".");
 const CLI = path.join(ROOT, "bin", "workloop.mjs");
 
 function run(args, { cwd = ROOT, env = process.env, input = "" } = {}) {
-  return spawnSync(process.execPath, [CLI, ...args], { cwd, env, input, encoding: "utf8" });
+  const effectiveArgs = args[0] === "hook" && !args.includes("--mode") ? [...args, "--mode", "deny"] : args;
+  return spawnSync(process.execPath, [CLI, ...effectiveArgs], { cwd, env, input, encoding: "utf8" });
 }
 
 function fixture(t) {
@@ -31,18 +32,18 @@ function fixture(t) {
 }
 
 function open(fx, extra = []) {
-  return run(["open", "--repo", fx.repo, "--goal", "finish", "--criterion-file", "check.mjs", "--criterion-policy", "default", "--alignment-because", "the checker exercises the result", "--files", "work.txt", "--risk", "routine", "--risk-reason", "isolated", ...extra], { env: fx.env });
+  return run(["open", "--repo", fx.repo, "--goal", "finish", "--criterion-file", "check.mjs", "--criterion-policy", "default", "--alignment-because", "the checker exercises the result", "--files", "work.txt", "--risk", "routine", "--risk-reason", "isolated", "--history-requirement", "artifact-only", ...extra], { env: fx.env });
 }
 
 function projection(repo) {
   return JSON.parse(fs.readFileSync(path.join(repo, ".workloop", "task.json"), "utf8")).projection;
 }
 
-test("runtime contract 5 describes independent repository and HOME schemas", () => {
+test("current runtime describes independent repository and HOME schemas", () => {
   const info = JSON.parse(run(["info"]).stdout);
   assert.deepEqual(info, {
-    name: "workloop", runtime_contract: 5, criterion_adapter_protocol_version: 2, task_snapshot_schema_version: 3,
-    event_record_schema_version: 2, outcome_projection_schema_version: 3,
+    name: "workloop", runtime_contract: 7, criterion_adapter_protocol_version: 2, task_snapshot_schema_version: 3,
+    event_record_schema_version: 2, outcome_projection_schema_version: 5,
     event_store: ".workloop/events.jsonl", outcome_projection: "~/.workloop/outcomes.jsonl",
     distribution_owner: "workloop",
   });
@@ -65,7 +66,7 @@ test("status, verify, report, and audit self-describe the active storage contrac
       snapshot: payload.task_snapshot_schema_version,
       record: payload.event_record_schema_version,
       outcome: payload.outcome_projection_schema_version,
-    }, { runtime: 5, snapshot: 3, record: 2, outcome: 3 }, args[0]);
+    }, { runtime: 7, snapshot: 3, record: 2, outcome: 5 }, args[0]);
   }
 
   fs.appendFileSync(path.join(fx.repo, ".workloop", "events.jsonl"), "{broken}\n");
@@ -97,8 +98,8 @@ test("CLI mutations commit one authority record and a disposable snapshot", (t) 
   assert.equal(run(["amend", "--repo", fx.repo, "--reason", "raise cap", "--writes", "5"], { env: fx.env }).status, 0);
   assert.equal(run(["abandon", "--repo", fx.repo, "--reason", "done"], { env: fx.env }).status, 0);
   assert.deepEqual(readEventStore(fx.repo).events.map((event) => event.kind), [
-    "task_opened", "write_authorized", "task_suspended", "task_resumed",
-    "review_recorded", "task_amended", "task_terminal",
+    "task_opened", "operation_intent_recorded", "task_suspended", "task_resumed",
+    "coverage_changed", "review_recorded", "task_amended", "task_terminal",
   ]);
 });
 
@@ -381,9 +382,9 @@ test("outcome cursor makes the normal commit path incremental", (t) => {
     events: [{
       task_id: first.events[0].task_id,
       task_event_sequence: 2,
-      kind: "write_authorized",
+      kind: "operation_intent_recorded",
       payload_version: 1,
-      payload: { files: ["work.txt"] },
+      payload: { operation_id: "cursor-operation", tool_family: "patch", declared_targets: ["work.txt"], target_coverage: "exact", host_profile: "fixture", receipt_expectation: "post", policy_mode: "nudge", policy_disposition: "conformant", policy_reasons: [], session_relation: "owner" },
     }],
   });
   let projectionReads = 0;
@@ -417,7 +418,7 @@ test("a stale repo cursor cannot omit history after the shared projection is reb
       task_id: "f68c6346-850e-4be2-a99b-ce3687097253",
       task_event_sequence: 1,
       kind: "task_opened",
-      payload_version: 1,
+      payload_version: first.events[0].payload_version,
       payload: first.events[0].payload,
     }],
   });
@@ -431,9 +432,9 @@ test("a stale repo cursor cannot omit history after the shared projection is reb
     events: [{
       task_id: first.events[0].task_id,
       task_event_sequence: 2,
-      kind: "write_authorized",
+      kind: "operation_intent_recorded",
       payload_version: 1,
-      payload: { files: ["work.txt"] },
+      payload: { operation_id: "repair-operation", tool_family: "patch", declared_targets: ["work.txt"], target_coverage: "exact", host_profile: "fixture", receipt_expectation: "post", policy_mode: "nudge", policy_disposition: "conformant", policy_reasons: [], session_relation: "owner" },
     }],
   });
 
@@ -495,7 +496,7 @@ test("HOME projection and cursor failures never roll back repository authority",
 test("[W05] twenty concurrent mutations serialize without sequence gaps or lost writes", async (t) => {
   const concurrency = Number.parseInt(process.env.WORKLOOP_W05_CONCURRENCY ?? "20", 10);
   assert.ok(Number.isSafeInteger(concurrency) && concurrency > 0);
-  const fx = fixture(t); assert.equal(open(fx, ["--writes", String(concurrency)]).status, 0);
+  const fx = fixture(t); assert.equal(open(fx).status, 0);
   const payload = JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, session_id: "owner-v5", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") } });
   const invoke = () => new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [CLI], { cwd: fx.repo, env: fx.env, stdio: ["pipe", "pipe", "pipe"] });
@@ -509,12 +510,12 @@ test("[W05] twenty concurrent mutations serialize without sequence gaps or lost 
   const replay = readEventStore(fx.repo);
   assert.equal(replay.records.length, concurrency + 1, JSON.stringify(results, null, 2));
   assert.deepEqual(replay.records.map((record) => record.repo_sequence), Array.from({ length: concurrency + 1 }, (_, index) => index + 1));
-  assert.equal(replay.events.filter((event) => event.kind === "write_authorized").length, concurrency);
+  assert.equal(replay.events.filter((event) => event.kind === "operation_intent_recorded").length, concurrency);
   assert.equal(projection(fx.repo).spent.writes, concurrency);
 });
 
 test("[W05] hook payload reading waits through a temporarily empty nonblocking stdin pipe", async (t) => {
-  const fx = fixture(t); assert.equal(open(fx, ["--writes", "1"]).status, 0);
+  const fx = fixture(t); assert.equal(open(fx).status, 0);
   const payload = JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, session_id: "owner-v5", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") } });
   const result = await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [CLI], { cwd: fx.repo, env: fx.env, stdio: ["pipe", "pipe", "pipe"] });
@@ -533,7 +534,7 @@ test("[W05] hook payload reading waits through a temporarily empty nonblocking s
 });
 
 test("[W05] hook payload reading accepts one complete JSON object without waiting for EOF", async (t) => {
-  const fx = fixture(t); assert.equal(open(fx, ["--writes", "1"]).status, 0);
+  const fx = fixture(t); assert.equal(open(fx).status, 0);
   const payload = JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, session_id: "owner-v5", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") } });
   const result = await new Promise((resolve, reject) => {
     const child = spawn(process.execPath, [CLI], { cwd: fx.repo, env: fx.env, stdio: ["pipe", "pipe", "pipe"] });
@@ -550,7 +551,7 @@ test("[W05] hook payload reading accepts one complete JSON object without waitin
 });
 
 test("[W05] hook payload reading waits when an intermediate chunk ends with a closing brace", async (t) => {
-  const fx = fixture(t); assert.equal(open(fx, ["--writes", "1"]).status, 0);
+  const fx = fixture(t); assert.equal(open(fx).status, 0);
   const prefix = JSON.stringify({ hook_event_name: "PreToolUse", cwd: fx.repo, session_id: "owner-v5", tool_name: "Write", tool_input: { file_path: path.join(fx.repo, "work.txt") } }).slice(0, -1);
   const payload = `${prefix},"ignored_tail":true}`;
   const splitAt = prefix.length;
@@ -567,5 +568,5 @@ test("[W05] hook payload reading waits when an intermediate chunk ends with a cl
   });
   assert.equal(result.status, 0, JSON.stringify(result));
   assert.equal(result.stdout, ""); assert.equal(result.stderr, "");
-  assert.equal(readEventStore(fx.repo).events.filter((event) => event.kind === "write_authorized").length, 1);
+  assert.equal(readEventStore(fx.repo).events.filter((event) => event.kind === "operation_intent_recorded").length, 1);
 });

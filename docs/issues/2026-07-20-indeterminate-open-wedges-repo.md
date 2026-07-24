@@ -13,7 +13,7 @@
 
 `open` 在判据观察为 `indeterminate` 时报 "task not opened",但 `task_opened`
 事件**已经提交进 `.workloop/events.jsonl`**。此后每一条读取路径都要重放这条
-事件,而 `lib/task-engine.mjs:420` 无条件抛出:
+事件,而 `历史任务状态运行时:420` 无条件抛出:
 
 ```js
 if (facts.observation.verdict === "indeterminate") throw new Error("criterion indeterminate; task not opened");

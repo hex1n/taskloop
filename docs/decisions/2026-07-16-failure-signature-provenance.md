@@ -3,7 +3,7 @@
 日期：2026-07-16
 票：[.scratch/loop-engineering-best-practice/issues/15-failure-signature-provenance.md](../../.scratch/loop-engineering-best-practice/issues/15-failure-signature-provenance.md)
 维度：5（迭代控制）停止半边——**修正其关闭判决**
-落点：**runtime**（`lib/application.mjs:625-626`、`lib/task-engine.mjs:483-485`）+ **skills**（loop-core 判据契约与写作纪律）
+落点：**runtime**（`lib/application.mjs:625-626`、`历史任务状态运行时:483-485`）+ **skills**（loop-core 判据契约与写作纪律）
 收口：owner 确认即关（本票非 02/04，不需 /plan-review）
 
 ## 一句话
@@ -27,7 +27,7 @@
 
 「判据自己在抖」不属 stuck 辖区——票 10 决议 1 已把假红/没跑起来重分类为 indeterminate 且不造 attempt，那是判据健康面。
 
-现行规则 1（3 次 `fnv1aHex(output_tail)` 相同，`task-engine.mjs:483-485`）想测白变，但拿信道哈希冒充失败身份——**它把「stderr 恒定」读成了「失败恒同」**。规则 2（7 次身份对恒定，`:487-489`）测重放，输入干净。
+现行规则 1（3 次 `fnv1aHex(output_tail)` 相同，`历史任务状态运行时:483-485`）想测白变，但拿信道哈希冒充失败身份——**它把「stderr 恒定」读成了「失败恒同」**。规则 2（7 次身份对恒定，`:487-489`）测重放，输入干净。
 
 ## 五条决议
 
@@ -51,6 +51,6 @@
 
 ## 执行项（进 #04）
 
-1. **指纹与消息层取材换源**（决议 2/4/5）——`application.mjs:625-626`：提取前缀行，有 → `signature = fnv1aHex(前缀行)`、`failure_summary` = 前缀行逐字；无 → `signature = null`、`failure_summary` = tail 开头 160。`task-engine.mjs:483-485` 加 null 防卫；`:487-489` 一字不动。**与票 10 决议 2/3（专用退出码）同批落地**——同属判据报告契约，分两批会让判据作者迁移两次。
+1. **指纹与消息层取材换源**（决议 2/4/5）——`application.mjs:625-626`：提取前缀行，有 → `signature = fnv1aHex(前缀行)`、`failure_summary` = 前缀行逐字；无 → `signature = null`、`failure_summary` = tail 开头 160。`历史任务状态运行时:483-485` 加 null 防卫；`:487-489` 一字不动。**与票 10 决议 2/3（专用退出码）同批落地**——同属判据报告契约，分两批会让判据作者迁移两次。
 2. **前缀字符串与提取规则定版**（决议 3）——loop-core 判据契约文档：一行、约定前缀、取最后一条匹配；消息行不是裁决通道。
 3. **理由行写作纪律**（决议 3 配套）——与票 14「判据写作三禁」并轨：理由行要稳定，禁时间戳/随机 id/流水路径（否则指纹永不相等，白变测不到——票面「方向错 2」在新取材下转为纪律面问题，旧机制上找样本已无意义）。

@@ -46,7 +46,7 @@ owner 裁定，taskloop 的评审**两本账都记**：
 
 ### 3. 检测器边界有声化
 
-「自缚声明」这个物种不成立：其绑定力是**检测器的属性，不是声明自己的**。`commandSafetyFailure` 自述 "it raises the cost of the obvious dangerous forms, it is not a sandbox"（`lib/supervision.mjs:129-134`）；destructive 检测是四条正则（`:156-159`），`node -e 'fs.rmSync(p,{recursive:true})'` 一条都不匹配。视野内 ≈ 观测，视野外**静默退化成裸声明**——比裸声明更坏一层：裸得看不见。
+「自缚声明」这个物种不成立：其绑定力是**检测器的属性，不是声明自己的**。`commandSafetyFailure` 自述 "it raises the cost of the obvious dangerous forms, it is not a sandbox"（`历史监督运行时:129-134`）；destructive 检测是四条正则（`:156-159`），`node -e 'fs.rmSync(p,{recursive:true})'` 一条都不匹配。视野内 ≈ 观测，视野外**静默退化成裸声明**——比裸声明更坏一层：裸得看不见。
 
 处置：**盲区自己可观测**——hook 解析不出写入目标时记 `["<command>"]`（`lib/application.mjs:950`），「我读不出你写了哪」这件事 hook 当场知道。**把「写入不可归因」升格为缺口信号**：看得清的按实得算赌注，看不清的按「看不清」抬缺口。检测器边界内外的切换从静默退化变成有声升级，**含糊本身计价**，谎不需要被识破。
 
@@ -62,10 +62,10 @@ owner 裁定，taskloop 的评审**两本账都记**：
 
 ## 证据
 
-- `machineRiskFloor`：`lib/task-engine.mjs:112-133`；两条 routine 守卫 `:130-131`。
+- `machineRiskFloor`：`历史任务状态运行时:112-133`；两条 routine 守卫 `:130-131`。
 - `acceptedReview` `:135-143` 不看 reviewer；`REVIEW_ORDER` `:78` 无 self_reread（结构排除正确——账本 99ef2c2a 真敲过 `self_reread/claude-opus`，记了账、没过门，行为正确）。
 - `projectAssurance` `:164-178` **不投影 change_classes**——v2 账本只能从 `floor.reasons` 的影子看它；唯一声明样本非边际（16da9ae1）。
-- 检测器自述 `lib/supervision.mjs:129-134`；每命令安全检查 `lib/application.mjs:932-935`（在 write-shaped 短路之前——**runtime 手上有命令形状，地板读的却是 grants**：同形「手上有观测却读声明」，本票定性为时刻错位而非又一次字段遗弃）。
+- 检测器自述 `历史监督运行时:129-134`；每命令安全检查 `lib/application.mjs:932-935`（在 write-shaped 短路之前——**runtime 手上有命令形状，地板读的却是 grants**：同形「手上有观测却读声明」，本票定性为时刻错位而非又一次字段遗弃）。
 - v2 账本 fold：10/10 effective ≥ substantial；routine 零出现。
 
 ## 对既有裁决的影响

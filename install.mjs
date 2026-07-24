@@ -2,7 +2,6 @@
 // Install workloop's dependency-free runtime and loop skills.
 
 import { createHash, randomUUID } from "node:crypto";
-import { execFileSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
@@ -13,6 +12,7 @@ import { directoryLockBackoff, localTimestamp, withOwnedDirectoryLock } from "./
 const __filename = fileURLToPath(import.meta.url);
 const SOURCE = path.resolve(process.env.WORKLOOP_INSTALL_REPO ?? path.dirname(__filename));
 const HOME = path.resolve(process.env.WORKLOOP_INSTALL_HOME ?? os.homedir());
+const ISOLATED_INSTALL = process.env.WORKLOOP_INSTALL_ISOLATED === "1";
 // Read the source checkout's contract from its prims.mjs text instead of
 // importing it: WORKLOOP_INSTALL_REPO may point at a different checkout than
 // the one this installer file (and its ./lib import) was loaded from, and the
@@ -20,21 +20,50 @@ const HOME = path.resolve(process.env.WORKLOOP_INSTALL_HOME ?? os.homedir());
 const RUNTIME_CONTRACT = (() => {
   const source = fs.readFileSync(path.join(SOURCE, "lib", "prims.mjs"), "utf8");
   const value = Number(source.match(/const RUNTIME_CONTRACT = (\d+);/)?.[1]);
-  if (value !== 5) throw new Error(`workloop installer requires runtime contract 5 source; refusing contract ${Number.isFinite(value) ? value : "unknown"}`);
+  if (value !== 7) throw new Error(`workloop installer requires runtime contract 7 source; refusing contract ${Number.isFinite(value) ? value : "unknown"}`);
   return value;
 })();
-const STOP_RECIPE_TIMEOUT_SECONDS = (() => {
-  const source = fs.readFileSync(path.join(SOURCE, "lib", "host-hooks.mjs"), "utf8");
-  const value = Number(source.match(/const STOP_RECIPE_TIMEOUT_SECONDS = (\d+);/)?.[1]);
-  if (!Number.isSafeInteger(value) || value <= 0) throw new Error("workloop installer cannot read the Stop recipe timeout contract");
+const HOST_HOOKS_SOURCE = fs.readFileSync(path.join(SOURCE, "lib", "host-hooks.mjs"), "utf8");
+function hookSourceInteger(name) {
+  const value = Number(HOST_HOOKS_SOURCE.match(new RegExp(`const ${name} = (\\d+);`))?.[1]);
+  if (!Number.isSafeInteger(value) || value <= 0) throw new Error(`workloop installer cannot read the ${name} contract`);
   return value;
-})();
+}
+function hookSourceString(name, seen = new Set()) {
+  if (seen.has(name)) throw new Error(`workloop installer found a cyclic ${name} contract`);
+  seen.add(name);
+  const literal = HOST_HOOKS_SOURCE.match(new RegExp(`const ${name} = "([^"]*)";`))?.[1];
+  if (typeof literal === "string" && literal) return literal;
+  const reference = HOST_HOOKS_SOURCE.match(new RegExp(`const ${name} = ([A-Z][A-Z0-9_]*);`))?.[1];
+  if (reference) return hookSourceString(reference, seen);
+  throw new Error(`workloop installer cannot read the ${name} contract`);
+}
+const PRE_TOOL_USE_MATCHER = hookSourceString("PRE_TOOL_USE_MATCHER");
+const POST_TOOL_USE_MATCHER = hookSourceString("POST_TOOL_USE_MATCHER");
+const STOP_MATCHER = hookSourceString("STOP_MATCHER");
+const PRE_TOOL_USE_RECIPE_TIMEOUT_SECONDS = hookSourceInteger("PRE_TOOL_USE_RECIPE_TIMEOUT_SECONDS");
+const POST_TOOL_USE_RECIPE_TIMEOUT_SECONDS = hookSourceInteger("POST_TOOL_USE_RECIPE_TIMEOUT_SECONDS");
+const STOP_RECIPE_TIMEOUT_SECONDS = hookSourceInteger("STOP_RECIPE_TIMEOUT_SECONDS");
 // Module-level plan log. Every exported entry point resets it so a library
 // caller never inherits a previous invocation's rows; main() aggregates the
 // rows appended by everything it runs after the one entry-point reset.
 const ACTIONS = [];
 const INSTALL_LOCK_TIMEOUT_MS = 30_000;
 const INSTALL_LOCK_STALE_MS = 5 * 60_000;
+const RUNTIME_PATHS = Object.freeze([
+  "bin/workloop.mjs",
+  "lib/authority-outcome-projection.mjs",
+  "lib/authority-state.mjs",
+  "lib/authority-tail-recovery.mjs",
+  "lib/authority-transaction.mjs",
+  "lib/criterion.mjs",
+  "lib/filesystem-authority-provider.mjs",
+  "lib/git-authority-provider.mjs",
+  "lib/hook-targets.mjs",
+  "lib/host-hooks.mjs",
+  "lib/prims.mjs",
+  "lib/provider-application.mjs",
+]);
 
 function plan(kind, detail) {
   ACTIONS.push([kind, detail]);
@@ -68,10 +97,11 @@ function walkFiles(root) {
 }
 
 function runtimeFiles(repo) {
-  return [path.join(repo, "bin"), path.join(repo, "lib")]
-    .flatMap((dir) => walkFiles(dir))
-    .map((file) => ({ file, relative: path.relative(repo, file).replace(/\\/g, "/") }))
-    .sort((a, b) => a.relative.localeCompare(b.relative));
+  return RUNTIME_PATHS.map((relative) => ({ file: path.join(repo, relative), relative }))
+    .map((entry) => {
+      if (!fs.statSync(entry.file).isFile()) throw new Error(`current runtime file is missing: ${entry.relative}`);
+      return entry;
+    });
 }
 
 function runtimeHash(files) {
@@ -309,6 +339,103 @@ function writeTextAtomicIfChanged(target, value, dry, { newMode } = {}) {
   }
 }
 
+function captureActivationFile(target) {
+  try {
+    const stat = fs.lstatSync(target);
+    if (!stat.isFile()) throw new Error(`cannot preserve non-file activation target: ${target}`);
+    return { target, present: true, bytes: fs.readFileSync(target), mode: stat.mode & 0o777 };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { target, present: false };
+    throw error;
+  }
+}
+
+function restoreActivationFile(snapshot) {
+  const { target } = snapshot;
+  if (!snapshot.present) {
+    fs.rmSync(target, { force: true });
+    return;
+  }
+  fs.mkdirSync(path.dirname(target), { recursive: true });
+  const temporary = path.join(
+    path.dirname(target),
+    `.${path.basename(target)}.${process.pid}.${process.hrtime.bigint().toString(36)}.rollback.tmp`,
+  );
+  try {
+    fs.writeFileSync(temporary, snapshot.bytes, { mode: snapshot.mode });
+    fs.renameSync(temporary, target);
+    fs.chmodSync(target, snapshot.mode);
+  } catch (error) {
+    try {
+      fs.rmSync(temporary, { force: true });
+    } catch {
+      // Preserve the rollback failure.
+    }
+    throw error;
+  }
+}
+
+function restoreActivationFiles(snapshots) {
+  const failures = [];
+  for (const snapshot of snapshots) {
+    try {
+      restoreActivationFile(snapshot);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) throw new AggregateError(failures, "failed to restore the previous Workloop activation");
+}
+
+function captureManagedPath(target) {
+  const capture = (current) => {
+    const stat = fs.lstatSync(current);
+    if (stat.isFile()) return { kind: "file", mode: stat.mode & 0o777, bytes: fs.readFileSync(current) };
+    if (stat.isSymbolicLink()) return { kind: "symlink", target: fs.readlinkSync(current) };
+    if (!stat.isDirectory()) throw new Error(`cannot preserve unsupported managed activation target: ${current}`);
+    return {
+      kind: "directory", mode: stat.mode & 0o777,
+      entries: fs.readdirSync(current).sort().map((name) => ({ name, entry: capture(path.join(current, name)) })),
+    };
+  };
+  try {
+    return { target, present: true, entry: capture(target) };
+  } catch (error) {
+    if (error?.code === "ENOENT") return { target, present: false };
+    throw error;
+  }
+}
+
+function materializeManagedEntry(target, entry) {
+  if (entry.kind === "file") {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.writeFileSync(target, entry.bytes, { mode: entry.mode });
+    fs.chmodSync(target, entry.mode);
+    return;
+  }
+  if (entry.kind === "symlink") {
+    fs.mkdirSync(path.dirname(target), { recursive: true });
+    fs.symlinkSync(entry.target, target);
+    return;
+  }
+  fs.mkdirSync(target, { recursive: true, mode: entry.mode });
+  fs.chmodSync(target, entry.mode);
+  for (const child of entry.entries) materializeManagedEntry(path.join(target, child.name), child.entry);
+}
+
+function restoreManagedPaths(snapshots) {
+  const failures = [];
+  for (const snapshot of snapshots) {
+    try {
+      fs.rmSync(snapshot.target, { recursive: true, force: true });
+      if (snapshot.present) materializeManagedEntry(snapshot.target, snapshot.entry);
+    } catch (error) {
+      failures.push(error);
+    }
+  }
+  if (failures.length) throw new AggregateError(failures, "failed to restore the previous Workloop managed skills");
+}
+
 function tomlTableRange(text, table) {
   const escaped = table.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
   const headers = [...text.matchAll(new RegExp(`^[ \\t]*\\[${escaped}\\][ \\t]*(?:#.*)?$`, "gm"))];
@@ -523,24 +650,35 @@ function tomlContainerDelta(value) {
   return delta;
 }
 
-function codexStopCommands(config, text) {
-  if (config.endsWith("hooks.json")) {
-    const parsed = JSON.parse(text);
-    const groups = parsed?.hooks?.Stop;
-    if (!Array.isArray(groups)) return [];
-    return groups.flatMap((group) => Array.isArray(group?.hooks) ? group.hooks : [])
-      .filter((handler) => typeof handler?.command === "string")
-      .map((handler) => ({ command: handler.command, timeout: handler.timeout }));
-  }
+const HOOK_EVENT_CONTRACTS = Object.freeze({
+  PreToolUse: Object.freeze({ matcher: PRE_TOOL_USE_MATCHER, timeout: PRE_TOOL_USE_RECIPE_TIMEOUT_SECONDS }),
+  PostToolUse: Object.freeze({ matcher: POST_TOOL_USE_MATCHER, timeout: POST_TOOL_USE_RECIPE_TIMEOUT_SECONDS }),
+  PostToolUseFailure: Object.freeze({ matcher: POST_TOOL_USE_MATCHER, timeout: POST_TOOL_USE_RECIPE_TIMEOUT_SECONDS }),
+  Stop: Object.freeze({ matcher: STOP_MATCHER, timeout: STOP_RECIPE_TIMEOUT_SECONDS }),
+});
+const CODEX_HOOK_EVENTS = Object.freeze(["PreToolUse", "PostToolUse", "Stop"]);
+const CLAUDE_HOOK_EVENTS = Object.freeze(["PreToolUse", "PostToolUse", "PostToolUseFailure", "Stop"]);
+
+function jsonHookCommands(text, event) {
+  const parsed = JSON.parse(text);
+  const groups = parsed?.hooks?.[event];
+  if (!Array.isArray(groups)) return [];
+  return groups.flatMap((group) => (Array.isArray(group?.hooks) ? group.hooks : [])
+    .filter((handler) => typeof handler?.command === "string")
+    .map((handler) => ({ command: handler.command, matcher: typeof group?.matcher === "string" ? group.matcher : null, timeout: handler.timeout })));
+}
+
+function codexHookCommands(config, text, event) {
+  if (config.endsWith(".json")) return jsonHookCommands(text, event);
   const sections = [];
   const unparsedHookLines = [];
   let current = null;
   let unparsedHookRegion = false;
   let unparsedHookDepth = null;
   for (const line of text.split(/\r?\n/)) {
-    const header = line.match(/^\s*\[\[hooks\.([^.\]]+)(?:\.hooks)?\]\]\s*$/);
+    const header = line.match(/^\s*\[\[hooks\.([^.\]]+)(\.hooks)?\]\]\s*$/);
     if (header) {
-      current = { event: header[1], lines: [] };
+      current = { event: header[1], handler: Boolean(header[2]), lines: [] };
       sections.push(current);
       unparsedHookRegion = false;
       unparsedHookDepth = null;
@@ -568,48 +706,102 @@ function codexStopCommands(config, text) {
       }
     }
   }
-  const commands = sections.filter((section) => section.event === "Stop").map((section) => {
+  const activeMatchers = new Map();
+  const commands = [];
+  for (const section of sections) {
     const body = section.lines.join("\n");
+    if (!section.handler) {
+      const matcher = body.match(/^\s*matcher\s*=\s*(?:"([^"]*)"|'([^']*)')\s*(?:#.*)?$/m);
+      activeMatchers.set(section.event, matcher?.[1] ?? matcher?.[2] ?? null);
+      continue;
+    }
+    if (section.event !== event) continue;
     const timeout = Number(body.match(/^\s*timeout\s*=\s*(\d+)\s*(?:#.*)?$/m)?.[1]);
-    return { command: body, timeout: Number.isSafeInteger(timeout) ? timeout : null };
-  });
+    commands.push({ command: body, matcher: activeMatchers.get(section.event) ?? null, timeout: Number.isSafeInteger(timeout) ? timeout : null });
+  }
   if (unparsedHookLines.some((line) => /workloop(?:\.mjs)?/i.test(line))) {
     throw new Error("workloop hook uses unsupported TOML syntax");
   }
   return commands;
 }
 
-function inspectCodexHookProfiles(home) {
+function codexWorkloopHandlers(home, { strict = false } = {}) {
+  const handlers = [];
   for (const config of [path.join(home, ".codex", "hooks.json"), path.join(home, ".codex", "config.toml")]) {
     let text;
     try {
       text = fs.readFileSync(config, "utf8");
     } catch (error) {
-      if (error?.code !== "ENOENT") plan("warning", `cannot inspect Codex Hook configuration ${config}: ${error?.message ?? error}; preserved ${config}`);
+      if (error?.code !== "ENOENT" && !strict) plan("warning", `cannot inspect Codex Hook configuration ${config}: ${error?.message ?? error}; preserved ${config}`);
+      if (error?.code !== "ENOENT" && strict) throw new Error(`cannot inspect Codex Hook configuration ${config}: ${error?.message ?? error}`);
       continue;
     }
-    let commands;
     try {
-      commands = codexStopCommands(config, text).filter((handler) => /workloop(?:\.mjs)?/i.test(handler.command));
-    } catch (error) {
-      plan("warning", `cannot inspect Codex Hook configuration ${config}: ${error?.message ?? error}; preserved ${config}`);
-      continue;
-    }
-    if (!commands.length) continue;
-    const joined = commands.map((handler) => handler.command).join("\n");
-    if (/\bhook\s+--profile\s+codex-safe\b/.test(joined) && !commands.some((handler) => !/\bhook\s+--profile\s+codex-safe\b/.test(handler.command))) {
-      if (commands.some((handler) => handler.timeout !== STOP_RECIPE_TIMEOUT_SECONDS)) {
-        plan("warning", `Codex workloop Stop hook uses a stale or missing timeout in ${config}; generate workloop hooks --profile codex-safe --mode nudge and merge it manually; configuration preserved`);
-        continue;
+      for (const event of CODEX_HOOK_EVENTS) {
+        for (const handler of codexHookCommands(config, text, event)) {
+          if (/workloop(?:\.mjs)?/i.test(handler.command)) handlers.push({ ...handler, config, event });
+        }
       }
-      plan("ok", `Codex workloop Stop hook uses codex-safe: ${config}`);
-      continue;
+    } catch (error) {
+      if (strict && /workloop(?:\.mjs)?/i.test(text)) throw new Error(`cannot activate provider Contract while Codex Hook configuration is unparseable: ${config}; repair the host-owned configuration manually`);
+      if (!strict) plan("warning", `cannot inspect Codex Hook configuration ${config}: ${error?.message ?? error}; preserved ${config}`);
     }
-    if (/\bhook\s+--profile\s+codex-cli-legacy\b/.test(joined)) {
-      plan("warning", `experimental Codex CLI legacy Stop hook found in ${config}; never use it in Codex App. Generate a safe recipe with workloop hooks --profile codex-safe --mode nudge; configuration preserved`);
-      continue;
+  }
+  return handlers;
+}
+
+function hasCodexProfile(command) {
+  const profiles = [...String(command).matchAll(/(?:^|\s)--profile(?:\s+|=)(?:"([^"]*)"|'([^']*)'|([^\s]+))/g)]
+    .map((match) => match[1] ?? match[2] ?? match[3]);
+  return /(?:^|\s)hook(?=\s|$)/.test(command) && profiles.length === 1 && profiles[0] === "codex";
+}
+
+function assertCodexHookActivationReady(home) {
+  for (const handler of codexWorkloopHandlers(home, { strict: true })) {
+    if (!hasCodexProfile(handler.command)) {
+      throw new Error(
+        `cannot activate provider Contract: Codex ${handler.event} workloop hook in ${handler.config} is not --profile codex; ` +
+        "update the host-owned Hook configuration manually before activation",
+      );
     }
-    plan("warning", `legacy Codex workloop Stop hook found in ${config}; generate a safe recipe with workloop hooks --profile codex-safe --mode nudge and merge it manually; configuration preserved`);
+  }
+}
+
+function inspectHookEvent({ host, event, handlers, configuredIn, expectedProfile }) {
+  const contract = HOOK_EVENT_CONTRACTS[event];
+  const locations = [...new Set((handlers.length ? handlers.map((handler) => handler.config) : configuredIn))].join(", ");
+  const recipe = `generate workloop hooks --profile ${expectedProfile} --mode nudge and merge it manually; configuration preserved`;
+  if (!handlers.length) {
+    plan("warning", `${host} workloop ${event} hook is missing in ${locations}; ${recipe}`);
+    return;
+  }
+  if (handlers.length !== 1) {
+    plan("warning", `${host} workloop ${event} hook is configured more than once in ${locations}; keep exactly one generated handler; configuration preserved`);
+    return;
+  }
+  const profileMatches = expectedProfile === "codex" ? hasCodexProfile : (command) => new RegExp(`(?:^|\\s)--profile(?:\\s+|=)["']?${expectedProfile}["']?(?=\\s|$)`).test(command);
+  if (!handlers.every((handler) => profileMatches(handler.command))) {
+    plan("warning", `incompatible ${host} workloop ${event} hook found in ${locations}; ${recipe}`);
+    return;
+  }
+  if (handlers.some((handler) => handler.timeout !== contract.timeout)) {
+    plan("warning", `${host} workloop ${event} hook uses a stale or missing timeout in ${locations}; ${recipe}`);
+    return;
+  }
+  if (handlers.some((handler) => handler.matcher !== contract.matcher)) {
+    plan("warning", `${host} workloop ${event} hook uses a stale or missing matcher in ${locations}; ${recipe}`);
+    return;
+  }
+  const profileDescription = host === "Claude" && event === "Stop" ? "the hard profile" : expectedProfile;
+  plan("ok", `${host} workloop ${event} hook uses ${profileDescription}: ${locations}`);
+}
+
+function inspectCodexHookProfiles(home) {
+  const workloopHandlers = codexWorkloopHandlers(home);
+  if (!workloopHandlers.length) return;
+  const configuredIn = workloopHandlers.map((handler) => handler.config);
+  for (const event of CODEX_HOOK_EVENTS) {
+    inspectHookEvent({ host: "Codex", event, handlers: workloopHandlers.filter((handler) => handler.event === event), configuredIn, expectedProfile: "codex" });
   }
 }
 
@@ -621,31 +813,27 @@ function inspectClaudeHookProfile(home) {
     if (error?.code !== "ENOENT") plan("warning", `cannot inspect Claude Hook configuration ${config}: ${error?.message ?? error}; preserved ${config}`);
     return;
   }
-  let parsed;
-  try { parsed = JSON.parse(text); }
+  let handlers;
+  try {
+    handlers = CLAUDE_HOOK_EVENTS.flatMap((event) => jsonHookCommands(text, event)
+      .filter((handler) => /workloop(?:\.mjs)?/i.test(handler.command))
+      .map((handler) => ({ ...handler, config, event })));
+  }
   catch (error) {
     plan("warning", `cannot inspect Claude Hook configuration ${config}: ${error?.message ?? error}; preserved ${config}`);
     return;
   }
-  const handlers = (Array.isArray(parsed?.hooks?.Stop) ? parsed.hooks.Stop : [])
-    .flatMap((group) => Array.isArray(group?.hooks) ? group.hooks : [])
-    .filter((handler) => typeof handler?.command === "string" && /workloop(?:\.mjs)?/i.test(handler.command));
   if (!handlers.length) return;
-  if (handlers.every((handler) => /\bhook\s+--profile\s+claude\b/.test(handler.command))) {
-    if (handlers.some((handler) => handler.timeout !== STOP_RECIPE_TIMEOUT_SECONDS)) {
-      plan("warning", `Claude workloop Stop hook uses a stale or missing timeout in ${config}; generate workloop hooks --profile claude --mode nudge and merge it manually; configuration preserved`);
-      return;
-    }
-    plan("ok", `Claude workloop Stop hook uses the hard profile: ${config}`);
-    return;
+  for (const event of CLAUDE_HOOK_EVENTS) {
+    inspectHookEvent({ host: "Claude", event, handlers: handlers.filter((handler) => handler.event === event), configuredIn: [config], expectedProfile: "claude" });
   }
-  plan("warning", `legacy Claude workloop Stop hook found in ${config}; generate workloop hooks --profile claude --mode nudge and merge it manually; configuration preserved`);
 }
 
 function pruneRuntimes(runtimeRoot, activeHash, dry) {
   if (!exists(runtimeRoot)) return;
+  const preserved = new Set([activeHash]);
   for (const name of fs.readdirSync(runtimeRoot).sort()) {
-    if (name === activeHash) continue;
+    if (preserved.has(name)) continue;
     const target = path.join(runtimeRoot, name);
     if (dry) {
       plan("remove", target);
@@ -712,21 +900,18 @@ function installWorkloopRuntimeUnlocked(repo, home, dry, { activate = true } = {
 
 export function installWorkloopRuntime(repo, home, dry = false) {
   ACTIONS.length = 0;
-  const install = () => installWorkloopRuntimeUnlocked(repo, home, dry);
+  const install = () => {
+    assertCodexHookActivationReady(home);
+    return installWorkloopRuntimeUnlocked(repo, home, dry);
+  };
   return dry ? install() : withInstallLock(home, install);
 }
 
 function readManagedSkills(file) {
   try {
     const parsed = JSON.parse(fs.readFileSync(file, "utf8"));
-    if (parsed?.version === 1 && Array.isArray(parsed.skills)) {
-      return {
-        runtimes: { ".claude": {}, ".codex": {} },
-        legacyNames: new Set(parsed.skills.filter((name) => /^[a-z0-9][a-z0-9-]*$/.test(name))),
-      };
-    }
     if (parsed?.version !== 2 || !parsed.runtimes || typeof parsed.runtimes !== "object") {
-      return { runtimes: { ".claude": {}, ".codex": {} }, legacyNames: new Set() };
+      return { runtimes: { ".claude": {}, ".codex": {} } };
     }
     const runtimes = {};
     for (const runtime of [".claude", ".codex"]) {
@@ -739,30 +924,24 @@ function readManagedSkills(file) {
         }
       }
     }
-    return { runtimes, legacyNames: new Set() };
+    return { runtimes };
   } catch {
-    return { runtimes: { ".claude": {}, ".codex": {} }, legacyNames: new Set() };
+    return { runtimes: { ".claude": {}, ".codex": {} } };
   }
 }
 
-// Byte-exact source trees from the last asdf-owned core at
-// 9c6dbdb957b530997c17a80bd4d2bdf3d3c02fd8, plus the unpublished name-only
-// workloop installer used during this extraction. They permit a one-time safe
-// adoption without treating an arbitrary same-name directory as workloop-owned.
-const LEGACY_CORE_DIGESTS = {
-  "loop-core": new Set([
-    "240b0483fc292a65f999eb598d12e48903fb4c3a50b77a0e3f2cd42dc5701e06",
-    "60e4890b035aeb597a3647ee012c1fd4cd7272804c9d2aa00ca568decc6ca47e",
-  ]),
-  workloop: new Set([
-    "3dcb2d46005915b1ccd4aa41d6de8b5fb365e9527e4d6da1930707be5ea46281",
-    "7468e5f0211b437157e0716e09cfafd1e3015a50f8030c5c5d0ef46a2fa59a4e",
-  ]),
-};
-
-export function legacySkillCanBeAdopted(skill, actualDigest, legacyNamed, currentDigest) {
-  if (LEGACY_CORE_DIGESTS[skill]?.has(actualDigest)) return true;
-  return Boolean(legacyNamed && actualDigest && actualDigest === currentDigest);
+function managedSkillActivationTargets(repo, home) {
+  const manifest = path.join(home, "bin", ".workloop-managed-skills.json");
+  const previous = readManagedSkills(manifest);
+  const names = new Set(sourceSkillNames(repo));
+  for (const runtime of [".claude", ".codex"]) {
+    for (const name of Object.keys(previous.runtimes[runtime] ?? {})) names.add(name);
+  }
+  const targets = [manifest];
+  for (const { root } of skillRootGroups(home).values()) {
+    for (const name of [...names].sort()) targets.push(path.join(root, name));
+  }
+  return targets;
 }
 
 function installWorkloopAssetsUnlocked(repo, home, dry) {
@@ -792,12 +971,8 @@ function installWorkloopAssetsUnlocked(repo, home, dry) {
       const expectedPrevious = groupPrevious[skill];
       if (pathPresent(target)) {
         if (!expectedPrevious) {
-          const actual = managedTreeDigest(target);
-          if (!legacySkillCanBeAdopted(skill, actual, previousState.legacyNames.has(skill), sourceDigests[skill])) {
-            plan("error", `${target} exists but is not proven workloop-owned; preserve it or remove it explicitly`);
-            continue;
-          }
-          plan("ok", `${target} (adopt byte-exact legacy workloop core)`);
+          plan("error", `${target} exists but is not proven workloop-owned; preserve it or remove it explicitly`);
+          continue;
         } else {
           const actual = managedTreeDigest(target);
           if (actual !== expectedPrevious) {
@@ -866,15 +1041,12 @@ const TREE_DIGEST_SHAPE = /^[0-9a-f]{64}$/;
 const SKILL_NAME_SHAPE = /^[a-z0-9][a-z0-9-]*$/;
 const JOURNAL_STEP_KEYS = "manifest_committed,runtime_staged,shim_activated,skills_activated";
 const CONTROL_FILE_SHAPES = {
-  ".workloop-managed-skills.json": (parsed) =>
-    (parsed?.version === 1 && Array.isArray(parsed.skills)
-      && parsed.skills.every((name) => typeof name === "string" && SKILL_NAME_SHAPE.test(name)))
-    || (parsed?.version === 2 && isPlainObject(parsed.runtimes)
-      && Object.keys(parsed.runtimes).sort().join(",") === ".claude,.codex"
-      && Object.values(parsed.runtimes).every((skills) => isPlainObject(skills)
-        && Object.entries(skills).every(([name, digest]) => SKILL_NAME_SHAPE.test(name) && typeof digest === "string" && TREE_DIGEST_SHAPE.test(digest)))),
+  ".workloop-managed-skills.json": (parsed) => parsed?.version === 2 && isPlainObject(parsed.runtimes)
+    && Object.keys(parsed.runtimes).sort().join(",") === ".claude,.codex"
+    && Object.values(parsed.runtimes).every((skills) => isPlainObject(skills)
+      && Object.entries(skills).every(([name, digest]) => SKILL_NAME_SHAPE.test(name) && typeof digest === "string" && TREE_DIGEST_SHAPE.test(digest))),
   ".workloop-active-release.json": (parsed) => isPlainObject(parsed)
-    && parsed.release_manifest_version === 1
+    && parsed.release_manifest_version === 3
     && typeof parsed.release_id === "string" && RUNTIME_HASH_SHAPE.test(parsed.release_id)
     && Number.isInteger(parsed.runtime_contract) && parsed.runtime_contract > 0
     && typeof parsed.runtime_digest === "string" && RUNTIME_HASH_SHAPE.test(parsed.runtime_digest)
@@ -884,7 +1056,7 @@ const CONTROL_FILE_SHAPES = {
     && parsed.journal_version === 1
     && typeof parsed.release_id === "string" && RUNTIME_HASH_SHAPE.test(parsed.release_id)
     && Number.isInteger(parsed.runtime_contract) && parsed.runtime_contract > 0
-    && ["activating", "committed", "needs_manual_intervention"].includes(parsed.status)
+    && ["activating", "committed", "needs_manual_intervention", "rolled_back"].includes(parsed.status)
     && isPlainObject(parsed.steps)
     && Object.keys(parsed.steps).sort().join(",") === JOURNAL_STEP_KEYS
     && Object.values(parsed.steps).every((step) => typeof step === "boolean"),
@@ -1046,6 +1218,7 @@ export function installWorkloopAssets(repo, home, dry = false) {
 export function installWorkloop(repo, home, dry = false) {
   ACTIONS.length = 0;
   const install = () => {
+    assertCodexHookActivationReady(home);
     const runtime = installWorkloopRuntimeUnlocked(repo, home, dry, { activate: false });
     const releaseId = runtime.hash;
     const journal = path.join(home, "bin", ".workloop-activation-journal.json");
@@ -1059,68 +1232,75 @@ export function installWorkloop(repo, home, dry = false) {
     };
     writeTextAtomicIfChanged(journal, JSON.stringify(journalRow, null, 2) + "\n", dry);
     installFailpoint("runtime-staged");
-    installWorkloopAssetsUnlocked(repo, home, dry);
-    if (ACTIONS.some(([kind]) => kind === "error")) {
-      journalRow.status = "needs_manual_intervention";
+    const managedSnapshots = managedSkillActivationTargets(repo, home).map(captureManagedPath);
+    const activationSnapshots = [
+      path.join(home, "bin", "workloop.mjs"),
+      path.join(home, "bin", "workloop.cmd"),
+      path.join(home, "bin", "workloop.ps1"),
+      releaseManifest,
+    ].map(captureActivationFile);
+    let skillsStarted = false; let activationStarted = false;
+    try {
+      skillsStarted = true;
+      installWorkloopAssetsUnlocked(repo, home, dry);
+      if (ACTIONS.some(([kind]) => kind === "error")) {
+        if (!dry) restoreManagedPaths(managedSnapshots);
+        journalRow.status = "needs_manual_intervention";
+        journalRow.steps.skills_activated = false;
+        writeTextAtomicIfChanged(journal, JSON.stringify(journalRow, null, 2) + "\n", dry);
+        return runtime;
+      }
+      journalRow.steps.skills_activated = true;
       writeTextAtomicIfChanged(journal, JSON.stringify(journalRow, null, 2) + "\n", dry);
-      return runtime;
+      installFailpoint("skills-activated");
+      activationStarted = true;
+      activateRuntimeShims(home, runtime.hash, dry);
+      journalRow.steps.shim_activated = true;
+      writeTextAtomicIfChanged(journal, JSON.stringify(journalRow, null, 2) + "\n", dry);
+      installFailpoint("shim-activated");
+      const skillManifest = path.join(home, "bin", ".workloop-managed-skills.json");
+      const manifestRow = {
+        release_manifest_version: 3,
+        release_id: releaseId,
+        runtime_contract: RUNTIME_CONTRACT,
+        runtime_digest: runtime.hash,
+        managed_skills_manifest_digest: dry || !exists(skillManifest) ? null : createHash("sha256").update(fs.readFileSync(skillManifest)).digest("hex"),
+      };
+      writeTextAtomicIfChanged(releaseManifest, JSON.stringify(manifestRow, null, 2) + "\n", dry);
+      journalRow.steps.manifest_committed = true;
+      journalRow.status = "committed";
+      writeTextAtomicIfChanged(journal, JSON.stringify(journalRow, null, 2) + "\n", dry);
+      installFailpoint("manifest-committed");
+      if (!dry) fs.rmSync(journal, { force: true });
+      installFailpoint("journal-cleaned");
+    } catch (error) {
+      const rollbackFailures = [];
+      if (!dry && activationStarted) {
+        try { restoreActivationFiles(activationSnapshots); }
+        catch (rollbackError) { rollbackFailures.push(rollbackError); }
+      }
+      if (!dry && skillsStarted) {
+        try { restoreManagedPaths(managedSnapshots); }
+        catch (rollbackError) { rollbackFailures.push(rollbackError); }
+      }
+      if (!dry) {
+        journalRow.steps.skills_activated = false;
+        journalRow.steps.shim_activated = false;
+        journalRow.steps.manifest_committed = false;
+        journalRow.status = "rolled_back";
+        try {
+          if (exists(journal)) writeTextAtomicIfChanged(journal, JSON.stringify(journalRow, null, 2) + "\n", false);
+        } catch (rollbackError) {
+          rollbackFailures.push(rollbackError);
+        }
+      }
+      if (rollbackFailures.length) throw new AggregateError([error, ...rollbackFailures], "Workloop activation failed and rollback was incomplete");
+      throw error;
     }
-    journalRow.steps.skills_activated = true;
-    writeTextAtomicIfChanged(journal, JSON.stringify(journalRow, null, 2) + "\n", dry);
-    installFailpoint("skills-activated");
-    activateRuntimeShims(home, runtime.hash, dry);
-    journalRow.steps.shim_activated = true;
-    writeTextAtomicIfChanged(journal, JSON.stringify(journalRow, null, 2) + "\n", dry);
-    installFailpoint("shim-activated");
-    const skillManifest = path.join(home, "bin", ".workloop-managed-skills.json");
-    const manifestRow = {
-      release_manifest_version: 1,
-      release_id: releaseId,
-      runtime_contract: RUNTIME_CONTRACT,
-      runtime_digest: runtime.hash,
-      managed_skills_manifest_digest: dry || !exists(skillManifest) ? null : createHash("sha256").update(fs.readFileSync(skillManifest)).digest("hex"),
-    };
-    writeTextAtomicIfChanged(releaseManifest, JSON.stringify(manifestRow, null, 2) + "\n", dry);
-    journalRow.steps.manifest_committed = true;
-    journalRow.status = "committed";
-    writeTextAtomicIfChanged(journal, JSON.stringify(journalRow, null, 2) + "\n", dry);
-    installFailpoint("manifest-committed");
-    if (!dry) fs.rmSync(journal, { force: true });
-    installFailpoint("journal-cleaned");
     pruneRuntimes(path.join(home, "bin", ".workloop-runtime"), runtime.hash, dry);
     return runtime;
   };
   return dry ? install() : withInstallLock(home, install);
-}
-
-function registerCommitDistribution(repo, dry) {
-  if (!exists(path.join(repo, ".git")) || !exists(path.join(repo, "hooks", "post-commit"))) return;
-  const expectedHooksPath = path.resolve(repo, "hooks");
-  const samePath = (a, b) => {
-    const left = path.normalize(a);
-    const right = path.normalize(b);
-    return process.platform === "win32" ? left.toLowerCase() === right.toLowerCase() : left === right;
-  };
-  let current = "";
-  try {
-    current = execFileSync("git", ["-C", repo, "config", "--get", "core.hooksPath"], {
-      encoding: "utf8",
-      stdio: ["ignore", "pipe", "pipe"],
-    }).trim();
-  } catch {
-    current = "";
-  }
-  const currentHooksPath = current ? path.resolve(repo, current) : "";
-  if (current === "hooks" || (currentHooksPath && samePath(currentHooksPath, expectedHooksPath))) {
-    plan("ok", current === "hooks" ? "core.hooksPath=hooks" : `core.hooksPath=${current}`);
-    return;
-  }
-  if (current) {
-    plan("error", `core.hooksPath is '${current}'; not replacing a foreign hook directory`);
-    return;
-  }
-  plan("update", "git config core.hooksPath hooks");
-  if (!dry) execFileSync("git", ["-C", repo, "config", "core.hooksPath", "hooks"]);
 }
 
 function main() {
@@ -1133,7 +1313,6 @@ function main() {
   }
   ACTIONS.length = 0;
   const installed = installWorkloop(SOURCE, HOME, dry);
-  registerCommitDistribution(SOURCE, dry);
   const bindCodex = () => configureCodexLedgerBinding(HOME, { configure: configureCodex, dry });
   if (configureCodex && !dry) withInstallLock(HOME, bindCodex);
   else bindCodex();
@@ -1176,6 +1355,8 @@ export function invokedAsScript(moduleUrl) {
   };
   return resolve(entry) === resolve(fileURLToPath(moduleUrl));
 }
+
+export { assertCodexHookActivationReady };
 
 if (invokedAsScript(import.meta.url)) {
   process.exit(main());

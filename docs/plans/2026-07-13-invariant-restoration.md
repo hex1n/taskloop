@@ -3,7 +3,7 @@
 **类型**：改进方案（第一性原理推导，未实现）
 **日期**：2026-07-13
 **触发**：对照 OpenAI Prompting 指南与 Anthropic Claude Code Best Practices 逐环检验 taskloop 控制链；外部第二模型（GPT-5.6）分析交叉校准
-**依据**：`AGENTS.md`、`skills/workloop/SKILL.md`、`skills/loop-core/REFERENCE.md`、`skills/loop-core/HOSTS.md`、`lib/application.mjs`、`lib/task-engine.mjs`、`lib/supervision.mjs`、`lib/untracked.mjs`、`install.mjs` 现状实读
+**依据**：`AGENTS.md`、`skills/workloop/SKILL.md`、`skills/loop-core/REFERENCE.md`、`skills/loop-core/HOSTS.md`、`lib/application.mjs`、`历史任务状态运行时`、`历史监督运行时`、`lib/untracked.mjs`、`install.mjs` 现状实读
 **推导轮次**：文章启发裁剪 → 第二模型建议评审 → 公理法重推 → 规划器收敛（裁剪法与公理法产出同组工作项，公理法修正 P1 设计）
 **修订**：
 - 2026-07-13：P2 由"枚举已知工具"改为"通用效应动词形状匹配"，枚举降级为测试矩阵；术语对齐 schema v2 状态模型，移除 red/green 域词（见 [2026-07-11-criterion-vocabulary-and-state-model.md](2026-07-11-criterion-vocabulary-and-state-model.md)）
@@ -11,7 +11,7 @@
 - 2026-07-13（三）：两项用户拍板转向——judgment 环配方**入本仓**（P6 升级为 judgmentloop bundled skill，AGENTS.md"仅 workloop"章程行随附修订，撤销对应排除项，取代（二）中的外部仓放置）；P5 dispatch 消息路由明确**双宿主**（消息宿主中立，经同一运行时通道达 Claude 与 Codex）
 - 2026-07-13（四）：fresh-context 子代理评审（3 blocking / 3 advisory，逐条复核后全部采纳）——P6 撤销"install.mjs 登记"误读（skill 发现为动态枚举）；P1 重构为扩展既有 `failureSuspension`（same-signature stuck 与 out_of_budget 路径已存在）；假设 #1 依 `HOSTS.md` 真机 spike 改判已验证，探针 A 收窄并改用 `--rounds 20`；P4 补 not-covered；词法类描述补全为五类；行号订正
 - 2026-07-13（六）：**P2–P6 全部落地并收口 `terminal(achieved)`，六项完成**。P2 经五轮 second-model 评审收敛（命令位锚定、换行边界、gh 路径前缀、行续接入口折叠，final 0/0）；P3 两轮 fresh-context（review 字段名 `*_findings_count` blocking 修复、terminal 渲染补测）；P4 两轮（"无判据先 open 再挂起"与 CLI 结构矛盾改为 ask-first、amend criterion/policy flag 拆分）；P5 一轮 0/0（双宿主同一消息通道，宿主中立断言入测）；P6 两轮（"未裁决"语义改判 unsatisfied——done-when 是人已验收、未验收即不成立；rubric 承载于 adapter 单文件以获指纹保证；行为测试走通 criterion-file+tri-state+steady-satisfied 全链）。全套 89/89。P1/P2/P3 判据为全套件（accept-proof-gap --granted-by self 在案）；P4/P5/P6 用 criterion-file 检查器（全输入覆盖，无 gap）。
-- 2026-07-13（五）：**P1 已实现并收口 `terminal(achieved)`**（探针 A/B 前置完成，结果见"探针结果"节）。落地与契约的偏差：① second-model 评审两轮——首轮 2 blocking：satisfied/indeterminate 插入不打断"连续"为真缺陷，修复引入引擎侧 `unsatisfied_streak` 字段（增于 observe/achieve、satisfied/indeterminate 归零、旧任务容忍缺省），envelope 经 `amend --files` 扩至 `lib/task-engine.mjs`；achieve 计入判定为动词中立的既定语义（与 out_of_budget/same-signature 一致），复审接受，终轮 0/0。② 挂起沿用既有"先 block 一次带挂起消息、下一 Stop 释放"约定，非原文的"直接释放"。③ 命令判据输入覆盖为 gap，已 `accept-proof-gap --granted-by self`（proof provisional）。全套 82/82；测试判据出生红经 achieve 挣得 witness
+- 2026-07-13（五）：**P1 已实现并收口 `terminal(achieved)`**（探针 A/B 前置完成，结果见"探针结果"节）。落地与契约的偏差：① second-model 评审两轮——首轮 2 blocking：satisfied/indeterminate 插入不打断"连续"为真缺陷，修复引入引擎侧 `unsatisfied_streak` 字段（增于 observe/achieve、satisfied/indeterminate 归零、旧任务容忍缺省），envelope 经 `amend --files` 扩至 `历史任务状态运行时`；achieve 计入判定为动词中立的既定语义（与 out_of_budget/same-signature 一致），复审接受，终轮 0/0。② 挂起沿用既有"先 block 一次带挂起消息、下一 Stop 释放"约定，非原文的"直接释放"。③ 命令判据输入覆盖为 gap，已 `accept-proof-gap --granted-by self`（proof provisional）。全套 82/82；测试判据出生红经 achieve 挣得 witness
 **验证**：各任务判据见下文契约；文档层验证 = 本文所引行号与机制描述均来自当日源码实读
 
 ## TL;DR
@@ -19,7 +19,7 @@
 taskloop 的存在理由是"工作者的自述不是证据"。沿控制链（契约 → 写闸 → 停闸 → 终局 → 账目）逐环检验，发现三处已验证的不变量破口和一处判断层空白：
 
 1. **裁停权在特定条件下被宿主静默夺走**：宿主 8 连块强制放行是真机已录事实（`skills/loop-core/HOSTS.md`，Claude Code 2.1.207 / Codex CLI 0.144.1 双宿主 spike）。默认预算 8 下 out_of_budget 自挂起恰在第 8 次 metered Stop 先行兜住；缺口在 amend 预算 >8 的任务单回合内输给宿主连块计数，以及判据尾非确定（时间戳等）时绕过既有 same-signature stuck（×3）路径——此时任务停在 `active`，无生命周期事件，判断快照丢失。
-2. **publish 形状的不可逆外效零授权放行**：`npm publish`、`gh pr create`、`gh release create` 等不落入任何词法类（`lib/supervision.mjs` 的 `commandSafetyFailure` 现有五类：remote-exec、network、install、密钥转储、destructive——publish 形状不匹配其中任何一类）。
+2. **publish 形状的不可逆外效零授权放行**：`npm publish`、`gh pr create`、`gh release create` 等不落入任何词法类（`历史监督运行时` 的 `commandSafetyFailure` 现有五类：remote-exec、network、install、密钥转储、destructive——publish 形状不匹配其中任何一类）。
 3. **closeout 账目由工作者自述**：`skills/workloop/SKILL.md` §5 的报告要求是对 agent 的文本指令，机器不生成、不校验——claim-based accounting 是 claim-based success 的上一层同病。
 4. **判断层规则未预注册**：判据索要技法、上下文轮换出口、advisory 不扩界、中途转向的动词映射，运行时管不了语义，skill 文本也没写。
 5. **dispatch 消息缺纪律路由**（work-loop 卡片退役后暴露）：untracked 通道自第一个文件即发 notice、第二个文件起 deny（`lib/untracked.mjs:92-106`），always-on 的 dispatch 强制已在，但消息把 agent 路由到裸 CLI 模板——诱导现场硬凑判据过闸门。
@@ -78,10 +78,10 @@ taskloop 的存在理由是"工作者的自述不是证据"。沿控制链（契
 
 原理：不可逆世界效应必须有 grant；词法守卫只能兑现它认得的形状。初版枚举已知工具（npm/gh/cargo/…），但枚举永远追不上生态——机制应当匹配**形状**而非工具名：命令的子命令自我宣告了对外效应（publish/deploy/release/push/upload），守卫裁决的是这个宣告，不是实际效果。这与拒绝六级效果分类是同一条原理（对守卫自身应用 A1：只声明能兑现的），只是把"能兑现"的边界画准：动词形状可兑现，GET/POST 语义不可兑现。
 
-- **改动**：`commandSafetyFailure` 新增通用效应动词类：`<工具> <效应动词>` 形状（动词集：`publish|deploy|release|push|upload`），无 `publish` grant 即拒绝。三处收边：`git push` 继续走既有 git op 授权（git grant 本就按操作逐个授权），不落入本类；shell 内建与纯文本工具（echo/printf/cat/grep 等）排除；多词已知形态（`gh (pr|release|issue) create`）作小补充清单。grant 词汇表（`lib/task-engine.mjs` 封闭枚举）加 `publish`，归 critical 档（对外不可逆）；`open`/`amend` 加 `--publish-allowed`。
+- **改动**：`commandSafetyFailure` 新增通用效应动词类：`<工具> <效应动词>` 形状（动词集：`publish|deploy|release|push|upload`），无 `publish` grant 即拒绝。三处收边：`git push` 继续走既有 git op 授权（git grant 本就按操作逐个授权），不落入本类；shell 内建与纯文本工具（echo/printf/cat/grep 等）排除；多词已知形态（`gh (pr|release|issue) create`）作小补充清单。grant 词汇表（`历史任务状态运行时` 封闭枚举）加 `publish`，归 critical 档（对外不可逆）；`open`/`amend` 加 `--publish-allowed`。
 - **反演检验**：通用匹配的代价是词形碰撞误报（如 `python deploy.py`——虽然"跑一个叫 deploy 的脚本"要求授权本就说得通）。误报被 deny 的代价是一次说明或授权，漏报的代价是不可逆外效静默放行——不对称支持宽拒绝。若实践中误报高频，收紧动词集是单向安全的调整。
 - **判据**（`deferred-witness`）：生态矩阵作为测试用例而非实现——`npm|yarn|pnpm publish`、`cargo publish`、`twine upload`、`docker push`、`helm push`、`mvn deploy`、`gem push`、`gh pr create` 无 grant 时被 PreToolUse deny、有 grant 放行；`git push` 仍走 git op 授权不受扰；`echo deploy`、`grep publish` 等排除样例不被拒。
-- **envelope**：`lib/supervision.mjs`、`lib/task-engine.mjs`、`lib/application.mjs`、`tests/**`。
+- **envelope**：`历史监督运行时`、`历史任务状态运行时`、`lib/application.mjs`、`tests/**`。
 - **risk/review**：`permissions` → critical → second-model。
 - **not-covered**：脚本/Makefile 包裹与改名脚本仍不可见——与现有类同等强度（"raises the cost, not a sandbox"）；词形碰撞误报按反演检验的不对称原则接受。
 
@@ -155,7 +155,7 @@ taskloop 的存在理由是"工作者的自述不是证据"。沿控制链（契
 
 ## 约束拆分与假设审计
 
-**真实约束**（源码/文档实读）：hook 协议 byte-exact 除非文档化变更（`AGENTS.md`）；lifecycle 迁移只在 `lib/task-engine.mjs`；叶模块只 import `lib/prims.mjs`；scheduler 仓库外；skill 可移植无宿主名；schema v2 封闭和类型；零依赖 Node。
+**真实约束**（源码/文档实读）：hook 协议 byte-exact 除非文档化变更（`AGENTS.md`）；lifecycle 迁移只在 `历史任务状态运行时`；叶模块只 import `lib/prims.mjs`；scheduler 仓库外；skill 可移植无宿主名；schema v2 封闭和类型；零依赖 Node。
 
 **惯例**（可变）：rounds 默认 8、词法类清单、report 输出格式。
 

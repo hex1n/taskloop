@@ -1,81 +1,142 @@
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import test from "node:test";
+import { mapExecution } from "../lib/criterion.mjs";
 
 const ROOT = path.resolve(".");
-const files = ["README.md", "skills/loop-core/REFERENCE.md", "skills/loop-core/ADAPTERS.md", "skills/loop-core/HOSTS.md", "skills/workloop/SKILL.md", "skills/judgmentloop/SKILL.md", "skills/meta-loop/SKILL.md"];
+const SKILL_FILES = [
+  "skills/workloop/SKILL.md",
+  "skills/judgmentloop/SKILL.md",
+  "skills/meta-loop/SKILL.md",
+];
+const SUPPORT_FILES = [
+  "skills/workloop/references/REFERENCE.md",
+  "skills/workloop/references/ADAPTERS.md",
+  "skills/workloop/references/HOSTS.md",
+];
+const PORTABLE_FILES = [...SKILL_FILES, ...SUPPORT_FILES];
 
-test("portable skill closure has no dangling relative markdown links", () => {
-  for (const rel of files.filter((x) => x.startsWith("skills/"))) {
-    const body = fs.readFileSync(path.join(ROOT, rel), "utf8");
-    for (const match of body.matchAll(/\[[^\]]+\]\((?!https?:|#)([^)#]+)(?:#[^)]+)?\)/g)) assert.ok(fs.existsSync(path.resolve(ROOT, path.dirname(rel), match[1])), `${rel} -> ${match[1]}`);
+function read(relative) {
+  return fs.readFileSync(path.join(ROOT, relative), "utf8");
+}
+
+function frontmatter(relative) {
+  const match = read(relative).match(/^---\n([\s\S]*?)\n---\n/u);
+  assert.ok(match, `${relative} must start with YAML frontmatter`);
+  const metadata = {};
+  for (const line of match[1].split("\n")) {
+    const separator = line.indexOf(":");
+    assert.ok(separator > 0, `${relative} has malformed frontmatter: ${line}`);
+    metadata[line.slice(0, separator).trim()] = line.slice(separator + 1).trim();
+  }
+  return metadata;
+}
+
+test("invokable Skills expose predictable trigger metadata", () => {
+  const topLevelSkills = fs.readdirSync(path.join(ROOT, "skills"), { withFileTypes: true })
+    .filter((entry) => entry.isDirectory())
+    .map((entry) => entry.name)
+    .sort();
+  assert.deepEqual(topLevelSkills, ["judgmentloop", "meta-loop", "workloop"]);
+  for (const relative of SKILL_FILES) {
+    const metadata = frontmatter(relative);
+    assert.deepEqual(Object.keys(metadata).sort(), ["description", "name"], relative);
+    assert.equal(metadata.name, path.basename(path.dirname(relative)), relative);
+    assert.match(metadata.description, /\bUse when\b/u, relative);
+    assert.ok(metadata.description.length <= 1024, relative);
   }
 });
 
-test("public docs and skills use the canonical observation/lifecycle/policy vocabulary", () => {
-  const joined = files.map((rel) => fs.readFileSync(path.join(ROOT, rel), "utf8")).join("\n");
-  for (const token of ["unsatisfied", "satisfied", "indeterminate", "active", "suspended", "terminal", "deferred_witness", "steady_satisfied", "criterion_generation_id"]) assert.match(joined, new RegExp(token));
-  assert.doesNotMatch(joined, /--earn-red|--keep-green|\bearn_red\b|\bred_witnessed\b|\bkeep_green\b|\bstate: done\b/);
-  assert.match(joined, /~\/\.workloop\/outcomes\.jsonl/);
-  assert.doesNotMatch(joined, /~\/\.workloop\/outcomes-v\d+\.jsonl/);
-});
-
-test("workloop remains task-facing and delegates shared semantics to loop-core", () => {
-  const skill = fs.readFileSync(path.join(ROOT, "skills/workloop/SKILL.md"), "utf8");
-  assert.match(skill, /\.\.\/loop-core\/REFERENCE\.md/);
-  assert.match(skill, /--criterion-policy/);
-  assert.match(skill, /--criterion-authored-by/);
-  assert.match(skill, /achieve/);
-  assert.doesNotMatch(skill, /source-project|session id|\/Users\//);
-});
-
-test("criterion authorship and grant provenance are separate public controls", () => {
-  const reference = fs.readFileSync(path.join(ROOT, "skills/loop-core/REFERENCE.md"), "utf8");
-  const help = fs.readFileSync(path.join(ROOT, "lib/application.mjs"), "utf8");
-  assert.match(reference, /Criterion authorship uses its own `--criterion-authored-by/);
-  assert.match(reference, /--granted-by.*reserved for grant, waiver, and risk/);
-  assert.match(help, /--criterion-authored-by self\|user/);
-});
-
-test("judgmentloop remains task-facing and delegates shared semantics to loop-core", () => {
-  const skill = fs.readFileSync(path.join(ROOT, "skills/judgmentloop/SKILL.md"), "utf8");
-  assert.match(skill, /\.\.\/loop-core\/REFERENCE\.md/);
-  assert.match(skill, /\.\.\/loop-core\/ADAPTERS\.md/);
-  assert.match(skill, /steady-satisfied/);
-  assert.match(skill, /achieve/);
-  assert.doesNotMatch(skill, /source-project|session id|\/Users\//);
-});
-
-test("adapter contract reserves dedicated tri-state exits and treats zero as silence", () => {
-  const adapter = fs.readFileSync(path.join(ROOT, "skills/loop-core/ADAPTERS.md"), "utf8");
-  assert.match(adapter, /exit 4[^\n]+satisfied/i); assert.match(adapter, /exit 3[^\n]+unsatisfied/i); assert.match(adapter, /exit 2[^\n]+indeterminate/i); assert.match(adapter, /exit 0[^\n]+(?:indeterminate|silent)/i);
-  assert.match(adapter, /one-time v3 cutover/); assert.match(adapter, /signature.*null/); assert.match(adapter, /seven-attempt guard/);
-});
-
-test("meta-loop ships a human-gated monthly incremental reminder binding", () => {
-  const skill = fs.readFileSync(path.join(ROOT, "skills/meta-loop/SKILL.md"), "utf8");
-  const reminder = fs.readFileSync(path.join(ROOT, "skills/meta-loop/REMINDER.md"), "utf8");
-  assert.match(skill, /monthly reminder/); assert.match(skill, /incremental terminal and abandoned/); assert.match(skill, /never unattended/);
-  assert.match(reminder, /workloop ledger --json/); assert.match(reminder, /newTerminal/); assert.match(reminder, /newAbandoned/); assert.match(reminder, /msg \* \$message/);
-});
-
-test("every CLI verb named by a portable skill exists in runtime help", () => {
-  const help = fs.readFileSync(path.join(ROOT, "lib/application.mjs"), "utf8");
-  const joined = files.filter((file) => file.endsWith("SKILL.md")).map((file) => fs.readFileSync(path.join(ROOT, file), "utf8")).join("\n");
-  for (const verb of ["open", "status", "verify", "achieve", "review", "ledger", "sync-outcomes"]) if (new RegExp(`workloop ${verb}\\b`).test(joined)) assert.match(help, new RegExp(`\\b${verb}\\b`));
-});
-
-test("release sources contain no removed public-domain vocabulary", () => {
-  const releaseFiles = ["lib", "skills", "README.md"].flatMap((rel) => {
-    const absolute = path.join(ROOT, rel); if (fs.statSync(absolute).isFile()) return [absolute];
-    const walk = (dir) => fs.readdirSync(dir, { withFileTypes: true }).flatMap((entry) => entry.isDirectory() ? walk(path.join(dir, entry.name)) : [path.join(dir, entry.name)]);
-    return walk(absolute);
-  }).filter((file) => /\.(?:mjs|md)$/.test(file));
-  const offenders = [];
-  for (const file of releaseFiles) {
-    const body = fs.readFileSync(file, "utf8");
-    if (/--earn-red|--keep-green|\bearn_red\b|\bred_witnessed\b|\bkeep_green\b|\bstate: done\b|weak_sensor_unreviewed|--provisional|outcomes-v1\.jsonl/.test(body)) offenders.push(path.relative(ROOT, file));
+test("portable Skill closure has no dangling relative links or machine-local paths", () => {
+  for (const relative of PORTABLE_FILES) {
+    const body = read(relative);
+    for (const match of body.matchAll(/\[[^\]]+\]\((?!https?:|#)([^)#]+)(?:#[^)]+)?\)/gu)) {
+      const target = path.resolve(ROOT, path.dirname(relative), match[1]);
+      assert.ok(fs.existsSync(target), `${relative} -> ${match[1]}`);
+    }
+    assert.doesNotMatch(body, /\/Users\/|[A-Za-z]:\\/u, relative);
   }
-  assert.deepEqual(offenders, []);
+});
+
+test("each Skill workflow has an explicit completion condition for every step", () => {
+  for (const relative of SKILL_FILES) {
+    const body = read(relative);
+    const steps = body.match(/^\d+\. /gmu) ?? [];
+    const completions = body.match(/^\s+Completion:/gmu) ?? [];
+    assert.ok(steps.length > 0, `${relative} has no workflow steps`);
+    assert.equal(completions.length, steps.length, relative);
+  }
+});
+
+test("Skill commands belong to the current public CLI surface", () => {
+  const result = spawnSync(process.execPath, [path.join(ROOT, "bin", "workloop.mjs"), "help"], {
+    cwd: ROOT,
+    encoding: "utf8",
+  });
+  assert.equal(result.status, 0, result.stderr);
+  const commandLine = result.stdout.split(/\r?\n/u).find((line) => line.includes("|"));
+  assert.ok(commandLine, result.stdout);
+  const publicVerbs = new Set(commandLine.split("|"));
+  const joined = SKILL_FILES.map(read).join("\n");
+
+  for (const verb of ["open", "join", "stage", "commit", "certify", "ledger", "audit", "tasks"]) {
+    assert.match(joined, new RegExp(`\`${verb}\``, "u"), verb);
+    assert.ok(publicVerbs.has(verb), verb);
+  }
+  for (const retired of ["verify", "achieve", "review", "sync-outcomes"]) {
+    assert.doesNotMatch(joined, new RegExp(`\`${retired}\``, "u"), retired);
+  }
+});
+
+test("criterion documentation matches the tri-state runtime contract", () => {
+  const adapter = read("skills/workloop/references/ADAPTERS.md");
+  const expected = new Map([
+    [4, ["satisfied", null]],
+    [3, ["unsatisfied", null]],
+    [2, ["indeterminate", "adapter_indeterminate"]],
+    [0, ["indeterminate", "adapter_silent"]],
+    [9, ["indeterminate", "invalid_adapter_exit"]],
+  ]);
+  for (const [status, [verdict, error]] of expected) {
+    const mapped = mapExecution({ status, duration_ms: 1, stdout: "", stderr: "" }, "tri-state", 10);
+    assert.equal(mapped.verdict, verdict, status);
+    assert.equal(mapped.execution.execution_error, error, status);
+  }
+  for (const code of [4, 3, 2, 0]) {
+    assert.match(adapter, new RegExp("Exit `" + code + "`", "u"), code);
+  }
+  assert.match(adapter, /Any other exit is invalid and therefore indeterminate/u);
+});
+
+test("portable Skills contain only current Contract material", () => {
+  const joined = PORTABLE_FILES.map(read).join("\n");
+  assert.equal(fs.existsSync(path.join(ROOT, "skills/meta-loop/REMINDER.md")), false);
+  assert.equal(fs.existsSync(path.join(ROOT, "skills/loop-core")), false);
+  assert.doesNotMatch(joined, /argument-hint:|workloop ledger --json|--repo\b|steady-satisfied|sync-outcomes/u);
+  assert.match(read("skills/workloop/SKILL.md"), /references\/REFERENCE\.md/u);
+  assert.match(read("skills/workloop/SKILL.md"), /references\/ADAPTERS\.md/u);
+  assert.match(read("skills/workloop/SKILL.md"), /references\/HOSTS\.md/u);
+  assert.match(read("skills/judgmentloop/SKILL.md"), /\.\.\/workloop\/references\/REFERENCE\.md/u);
+  assert.match(read("skills/judgmentloop/SKILL.md"), /\.\.\/workloop\/references\/ADAPTERS\.md/u);
+  assert.match(read("skills/meta-loop/SKILL.md"), /\.\.\/workloop\/references\/REFERENCE\.md/u);
+});
+
+test("AGENTS.md names the executable verification and architecture contract", () => {
+  const agents = read("AGENTS.md");
+  for (const command of [
+    "npm test",
+    "node tests/verify-provider-tickets.mjs",
+    "node bin/workloop.mjs help",
+  ]) assert.match(agents, new RegExp(command.replace(/[.*+?^${}()|[\]\\]/gu, "\\$&"), "u"), command);
+  assert.match(agents, /provider-neutral loop-engineering runtime/u);
+  assert.match(agents, /host owns execution approval/u);
+  assert.match(agents, /provider authority remains canonical/u);
+});
+
+test("default test scripts keep the packaged Skill contract in the gate", () => {
+  const scripts = JSON.parse(read("package.json")).scripts;
+  assert.match(scripts.test, /\btests\/skills\.test\.mjs\b/u);
+  assert.match(scripts["test:matrix"], /\btests\/skills\.test\.mjs\b/u);
 });

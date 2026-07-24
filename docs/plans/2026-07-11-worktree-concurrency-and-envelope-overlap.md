@@ -3,7 +3,7 @@
 **类型**: 设计方案(只出方案,未实现)
 **日期**: 2026-07-11
 **触发**: 实测中两个 session 共享同一 worktree,Stop hook 按 worktree 定界导致旁观 session 的回合去裁决/被诱导驱动另一个 session 的任务;并延伸到跨 worktree envelope 重叠的晚发现问题
-**依据**: `lib/task-engine.mjs`(`ensureEpisode`)/`lib/application.mjs`(`hookStop`/`hookPretool`/`cmdOpen`/`cmdAmend`)/`lib/supervision.mjs`(`envelopeDirty`/`insideEnvelope`/`currentRepoFiles`)机制实读 + 第一性原理分析 + Codex fresh-context 只读评审
+**依据**: `历史任务状态运行时`(`ensureEpisode`)/`lib/application.mjs`(`hookStop`/`hookPretool`/`cmdOpen`/`cmdAmend`)/`历史监督运行时`(`envelopeDirty`/`insideEnvelope`/`currentRepoFiles`)机制实读 + 第一性原理分析 + Codex fresh-context 只读评审
 **推导轮次**: 第一性根问题拆解 → worktree 模型校准 → "不要人分树"边界 → envelope 登记左移 Alt A/B 对比 → Codex 新线程评审(修正两处 + 重排优先级)
 
 ---
@@ -31,7 +31,7 @@ fail-open;advisory 不设闸门;drive-gate 分离;git 需 `--git-allowed`;缺字
 
 ## P0(必做)跨 session Stop/PreToolUse 归属 —— 根因
 
-**现状 bug**(`ensureEpisode`, lib/task-engine.mjs):活跃 episode 的 `session` ≠ 当前 hook 的 session 时,**无条件** `closeEpisode(…, "detached")` 并接管,随后对当前 worktree 跑判据。这是旁观者被 hold + 被诱导驱动的直接根因。
+**现状 bug**(`ensureEpisode`, 历史任务状态运行时):活跃 episode 的 `session` ≠ 当前 hook 的 session 时,**无条件** `closeEpisode(…, "detached")` 并接管,随后对当前 worktree 跑判据。这是旁观者被 hold + 被诱导驱动的直接根因。
 
 **改法 —— 显式交接优先,TTL 只当"主人消失"的逃生口**(对齐 taskloop"显式胜过推断",与撤回自动 drift 分类器同一立场):
 
@@ -43,14 +43,14 @@ fail-open;advisory 不设闸门;drive-gate 分离;git 需 `--git-allowed`;缺字
      - `hookStop`:release(return 0)+ advisory:"另一活跃 session 持有本 worktree 的任务;这是单写者争用——去开独立 worktree,或让 owner 先 suspend 再交接",**替换掉误导的判据消息**;
      - `hookPretool`:把该写**走无任务/untracked 路径**(owner 的 envelope 不治理外来 session),同一条 advisory。coherent:owner 的写边界只约束 owner。
 3. TTL = 并发窗口的显式化(可调,默认保守如 5 分钟);全程 advisory,双向误判都便宜,TTL 只兜"主人崩溃"这一窄口。
-4. **范围**:lib/task-engine.mjs(`ensureEpisode` 归属 + 租约刷新)、lib/application.mjs(`hookStop`/`hookPretool` 归属分路)、hook 测试。
+4. **范围**:历史任务状态运行时(`ensureEpisode` 归属 + 租约刷新)、lib/application.mjs(`hookStop`/`hookPretool` 归属分路)、hook 测试。
 5. **born-red 复现器**(双 session 交替):① 新鲜外来 Stop 被 release+advisory,不接管、不烧 owner 的轮;② suspend 后外来 resume 正常接管;③ 陈旧租约允许接管;④ 外来 PreToolUse 走 untracked 路径、不套 owner envelope。
 
 ---
 
 ## P1(值得做)兄弟 worktree envelope 重叠 advisory —— Alt B + Codex 修正
 
-**为什么 Alt B(查兄弟 task.json)胜过 Alt A(ledger 登记表)**:envelope 已完整写入 `task.envelope.files`(lib/task-engine.mjs `createTask`),`task.json` 用临时文件+rename 是当前 worktree 的**权威快照**(lib/task-store.mjs);ledger 是 per-HOME、会被 sandbox/异 HOME 打洞的历史遥测(实测 README 任务丢了全部 ledger 行),且需 schema 改动 + 历史归约。但 Codex 修正:sibling `task.json` **不是原子注册表**,而是分布式快照集合——双方同时 open 会双漏报,陈旧 open 会假阳性;对 advisory telemetry 可接受。
+**为什么 Alt B(查兄弟 task.json)胜过 Alt A(ledger 登记表)**:envelope 已完整写入 `task.envelope.files`(历史任务状态运行时 `createTask`),`task.json` 用临时文件+rename 是当前 worktree 的**权威快照**(lib/task-store.mjs);ledger 是 per-HOME、会被 sandbox/异 HOME 打洞的历史遥测(实测 README 任务丢了全部 ledger 行),且需 schema 改动 + 历史归约。但 Codex 修正:sibling `task.json` **不是原子注册表**,而是分布式快照集合——双方同时 open 会双漏报,陈旧 open 会假阳性;对 advisory telemetry 可接受。
 
 **改法**:`cmdOpen` **和** `cmdAmend --files`(Codex:只在 open 查会漏后续扩边)时:
 
@@ -61,7 +61,7 @@ fail-open;advisory 不设闸门;drive-gate 分离;git 需 `--git-allowed`;缺字
    - **潜在重叠**:仅静态前缀相容(取首个 `*`/`?` 前的**字符前缀**,非目录段,严格对齐 lib/prims.mjs `globToRegExp` 语义)→ 弱提示。`src/*.js` vs `src/*.md` 只算潜在且明确级查无同匹配文件 → 不误报;
 4. 消息**可操作**(Codex):列出兄弟 worktree 路径、那边的任务、双方**具体冲突 pattern**;
 5. advisory-only、fail-open:非 git/单 worktree/读失败 → **静默跳过**(对齐 `envelopeDirty` 异常退化);**不做** merge-base/branch reachability 过滤(Codex:声明空间相交不需要,过滤会漏掉之后才决定合并的任务);
-6. **范围**:lib/supervision.mjs(只读 worktree 枚举 + 两级重叠分析)、lib/application.mjs(接入 `cmdOpen`/`cmdAmend`)、测试。
+6. **范围**:历史监督运行时(只读 worktree 枚举 + 两级重叠分析)、lib/application.mjs(接入 `cmdOpen`/`cmdAmend`)、测试。
 7. **born-red 复现器**(两 worktree):① 同匹配文件→明确重叠告警;② 仅前缀相容无同匹配→潜在级/或不报;③ 不相交→静默;④ 单 worktree/非 git→静默;⑤ `amend --files` 新增重叠也报。
 
 ---

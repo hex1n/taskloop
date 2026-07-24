@@ -4,7 +4,7 @@
 仓库基线：`7dd7d3473e587c8b13a8619a4f5359150fade6e6`  
 模式：Plan  
 深度：Deep  
-输入来源：当前计划、`lib/application.mjs`、`lib/task-store.mjs`、`lib/task-engine.mjs`、`package.json`、`.github/workflows/test.yml`、installer/Windows 测试、上一轮 Fable 5 审查  
+输入来源：当前计划、`lib/application.mjs`、`lib/task-store.mjs`、`历史任务状态运行时`、`package.json`、`.github/workflows/test.yml`、installer/Windows 测试、上一轮 Fable 5 审查
 状态：实施候选计划；用户已决定 BUILD，但尚未授权写代码
 
 ## TL;DR
@@ -217,12 +217,12 @@ events-v3.jsonl append + fsync       唯一权威
 
 ### 模块边界
 
-- `lib/task-engine.mjs`：纯 `decide`、`evolve`、状态约束和派生投影；不做 I/O。
+- `历史任务状态运行时`：纯 `decide`、`evolve`、状态约束和派生投影；不做 I/O。
 - `lib/event-store.mjs`：新增 leaf，负责 record 校验、append/fsync、replay、tail 恢复和 audit；只导入 `lib/prims.mjs`。
 - `lib/task-store.mjs`：保留 repo lock，负责快照、legacy 原始字节显式归档和恢复入口；不把 v2 解析成运行态。
 - `lib/application.mjs`：唯一装配层，组合 event-store 与 task-store 的证据，执行 authority 判别，并编排加载、decide、事务提交、快照和外部投影。
 - `lib/outcome-ledger.mjs`：停止作为生产入口；新增 `lib/outcome-projector.mjs` 承担 v3 投影。
-- `lib/supervision.mjs`：读取 sibling v3 快照；不可读时继续保持 advisory/fail-open。
+- `历史监督运行时`：读取 sibling v3 快照；不可读时继续保持 advisory/fail-open。
 - owner hook contact 等非权威活跃度信息进入独立 best-effort session activity，不污染权威事件流。
 
 继续遵守现有架构规则：除 `application.mjs` 与 `prims.mjs` 外，leaf module 不导入 sibling leaf。
@@ -443,7 +443,7 @@ deny 路径冻结当前“先 tally、后裁决”的语义：`decide` 可以返
 
 ### Phase 1：重构纯状态引擎 — 3 人日
 
-在 `lib/task-engine.mjs` 建立：
+在 `历史任务状态运行时` 建立：
 
 ```js
 decide(state, command) -> { events, result }
@@ -567,13 +567,13 @@ taskloop archive-incompatible-state \
 | 路径 | 预期变化 |
 |---|---|
 | `lib/prims.mjs` | 独立版本、文件名、SHA-256/canonical helpers |
-| `lib/task-engine.mjs` | `decide`、`evolve`、transcript cursor 状态、v3 validators；删除旧 transition 路径 |
+| `历史任务状态运行时` | `decide`、`evolve`、transcript cursor 状态、v3 validators；删除旧 transition 路径 |
 | `lib/event-store.mjs` | 新增权威 JSONL 存储与恢复 |
 | `lib/task-store.mjs` | lock、legacy 原始归档、v3 snapshot |
 | `lib/application.mjs` | authority discriminator、事务装配、所有 mutation 接管、移除 transcript cursor sidecar、CLI |
 | `lib/outcome-ledger.mjs` | 从生产装配移除或由 v3 projector 替换 |
 | `lib/outcome-projector.mjs` | 新增 v3 outcome 投影 |
-| `lib/supervision.mjs` | sibling v3 snapshot、控制面保护 |
+| `历史监督运行时` | sibling v3 snapshot、控制面保护 |
 | `lib/untracked.mjs` | 保持非权威，不进入事件流 |
 | `tests/taskloop.test.mjs` | domain、CLI、hard cutover、transcript 幂等和 Hook 行为 |
 | `tests/fixtures/event-store-cases-v3.json` | 冻结 A/C/R/T/W/P case manifest |

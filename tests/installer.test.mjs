@@ -1,13 +1,32 @@
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
+import { createHash } from "node:crypto";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import test from "node:test";
 
+import { assertSourceActivationCompatible } from "../install.mjs";
+
 const ROOT = path.resolve(".");
+process.env.WORKLOOP_INSTALL_ISOLATED = "1";
 
 function run(script, args = [], options = {}) { return spawnSync(process.execPath, [script, ...args], { cwd: options.cwd ?? ROOT, env: options.env ?? process.env, input: options.input ?? "", encoding: "utf8" }); }
+
+function runtimeDigest(root) {
+  const entries = [];
+  const visit = (directory) => {
+    for (const entry of fs.readdirSync(directory, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name))) {
+      const file = path.join(directory, entry.name);
+      if (entry.isDirectory()) visit(file);
+      else entries.push({ file, relative: path.relative(root, file).replaceAll("\\", "/") });
+    }
+  };
+  for (const name of ["bin", "lib"]) visit(path.join(root, name));
+  const hash = createHash("sha256");
+  for (const entry of entries.sort((a, b) => a.relative.localeCompare(b.relative))) hash.update(entry.relative).update("\0").update(fs.readFileSync(entry.file)).update("\0");
+  return hash.digest("hex").slice(0, 12);
+}
 
 test("installer puts runtime and skills from one release under a temporary home", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-v1-")); const home = path.join(root, "home"); t.after(() => fs.rmSync(root, { recursive: true, force: true }));
@@ -18,10 +37,11 @@ test("installer puts runtime and skills from one release under a temporary home"
   const powershellShim = path.join(home, "bin", "workloop.ps1"); assert.ok(fs.existsSync(powershellShim));
   assert.equal(fs.readFileSync(windowsShim, "utf8"), '@echo off\r\nnode "%~dp0workloop.mjs" %*\r\n');
   assert.equal(fs.readFileSync(powershellShim, "utf8"), "$script = Join-Path $PSScriptRoot 'workloop.mjs'\r\n& node $script @args\r\nexit $LASTEXITCODE\r\n");
-  const info = JSON.parse(run(shim, ["info"], { env: { ...process.env, HOME: home, USERPROFILE: home } }).stdout); assert.equal(info.runtime_contract, 5);
+  const info = JSON.parse(run(shim, ["info"], { env: { ...process.env, HOME: home, USERPROFILE: home } }).stdout); assert.equal(info.runtime_contract, 7);
   for (const runtime of [".claude", ".codex"]) for (const skill of ["loop-core", "workloop", "judgmentloop", "meta-loop"]) assert.ok(fs.existsSync(path.join(home, runtime, "skills", skill, skill === "loop-core" ? "REFERENCE.md" : "SKILL.md")));
   const manifest = JSON.parse(fs.readFileSync(path.join(home, "bin", ".workloop-active-release.json"), "utf8"));
-  assert.equal(manifest.release_id, manifest.runtime_digest); assert.equal(manifest.runtime_contract, 5);
+  assert.equal(manifest.release_id, manifest.runtime_digest); assert.equal(manifest.runtime_contract, 7);
+  assert.deepEqual(manifest.compatibility_runtimes, { contract_5: null, contract_6: null });
   assert.equal(fs.existsSync(path.join(home, "bin", ".workloop-activation-journal.json")), false);
 });
 
@@ -42,12 +62,97 @@ test("installer warns about legacy Codex Stop hooks without editing user configu
   const safeConfig = JSON.parse(original.toString("utf8"));
   safeConfig.hooks.Stop[0].hooks[0].command += " hook --profile codex-safe";
   safeConfig.hooks.Stop[0].hooks[0].timeout = 45;
+  safeConfig.hooks.Stop[0].matcher = "*";
+  safeConfig.hooks.PreToolUse = [{
+    matcher: "apply_patch|Write|Edit|MultiEdit|Bash|PowerShell|mcp__.*",
+    hooks: [{ type: "command", command: 'node "/installed/workloop.mjs" hook --profile codex-safe', timeout: 20 }],
+  }];
+  safeConfig.hooks.PostToolUse = [{
+    matcher: "apply_patch|Write|Edit|MultiEdit|Bash|PowerShell|mcp__.*",
+    hooks: [{ type: "command", command: 'node "/installed/workloop.mjs" hook --profile codex-safe', timeout: 30 }],
+  }];
   const safe = Buffer.from(JSON.stringify(safeConfig, null, 2) + "\n");
   fs.writeFileSync(config, safe);
   const checked = run(path.join(ROOT, "install.mjs"), [], { env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT } });
   assert.equal(checked.status, 0, checked.stderr || checked.stdout);
-  assert.doesNotMatch(checked.stdout, /legacy Codex workloop Stop hook found/);
+  assert.doesNotMatch(checked.stdout, /(?:legacy|experimental).*Codex.*hook|Codex workloop (?:PreToolUse|PostToolUse|Stop) hook (?:is missing|uses a stale|is configured)/);
   assert.deepEqual(fs.readFileSync(config), safe);
+});
+
+test("installer diagnoses a missing Codex PreToolUse hook without editing configuration", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-missing-pretooluse-")); const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const config = path.join(home, ".codex", "hooks.json");
+  fs.mkdirSync(path.dirname(config), { recursive: true });
+  const original = Buffer.from(JSON.stringify({ hooks: {
+    Stop: [{ matcher: "*", hooks: [{ type: "command", command: 'node "/installed/workloop.mjs" hook --profile codex-safe --mode nudge', timeout: 45 }] }],
+  } }, null, 2) + "\n");
+  fs.writeFileSync(config, original);
+
+  const installed = run(path.join(ROOT, "install.mjs"), [], { env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT } });
+
+  assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+  assert.match(installed.stdout, /Codex workloop PreToolUse hook is missing.*hooks --profile codex-safe/);
+  assert.match(installed.stdout, /Codex workloop PostToolUse hook is missing.*hooks --profile codex-safe/);
+  assert.deepEqual(fs.readFileSync(config), original);
+});
+
+test("installer diagnoses Codex PreToolUse profile, timeout, and matcher drift", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-pretooluse-drift-"));
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const cases = [
+    {
+      name: "profile",
+      handler: { type: "command", command: 'node "/installed/workloop.mjs" hook --profile codex-cli-legacy --mode nudge', timeout: 20 },
+      matcher: "apply_patch|Write|Edit|MultiEdit|Bash|PowerShell|mcp__.*",
+      expected: /experimental Codex CLI legacy PreToolUse hook/,
+    },
+    {
+      name: "timeout",
+      handler: { type: "command", command: 'node "/installed/workloop.mjs" hook --profile codex-safe --mode nudge', timeout: 45 },
+      matcher: "apply_patch|Write|Edit|MultiEdit|Bash|PowerShell|mcp__.*",
+      expected: /Codex workloop PreToolUse hook uses a stale or missing timeout/,
+    },
+    {
+      name: "matcher",
+      handler: { type: "command", command: 'node "/installed/workloop.mjs" hook --profile codex-safe --mode nudge', timeout: 20 },
+      matcher: "Write|Bash",
+      expected: /Codex workloop PreToolUse hook uses a stale or missing matcher/,
+    },
+  ];
+  for (const fixture of cases) {
+    const home = path.join(root, fixture.name);
+    const config = path.join(home, ".codex", "hooks.json");
+    fs.mkdirSync(path.dirname(config), { recursive: true });
+    const original = Buffer.from(JSON.stringify({ hooks: {
+      PreToolUse: [{ matcher: fixture.matcher, hooks: [fixture.handler] }],
+      Stop: [{ matcher: "*", hooks: [{ type: "command", command: 'node "/installed/workloop.mjs" hook --profile codex-safe --mode nudge', timeout: 45 }] }],
+    } }, null, 2) + "\n");
+    fs.writeFileSync(config, original);
+
+    const installed = run(path.join(ROOT, "install.mjs"), [], { env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT } });
+    assert.equal(installed.status, 0, `${fixture.name}: ${installed.stderr || installed.stdout}`);
+    assert.match(installed.stdout, fixture.expected, fixture.name);
+    assert.deepEqual(fs.readFileSync(config), original, fixture.name);
+  }
+});
+
+test("installer diagnoses Claude PreToolUse drift without editing configuration", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-claude-pretooluse-")); const home = path.join(root, "home");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  const config = path.join(home, ".claude", "settings.json");
+  fs.mkdirSync(path.dirname(config), { recursive: true });
+  const original = Buffer.from(JSON.stringify({ hooks: {
+    PreToolUse: [{ matcher: "Write|Edit", hooks: [{ type: "command", command: 'node "/installed/workloop.mjs" hook --profile claude --mode nudge', timeout: 45 }] }],
+    Stop: [{ matcher: "*", hooks: [{ type: "command", command: 'node "/installed/workloop.mjs" hook --profile claude --mode nudge', timeout: 45 }] }],
+  } }, null, 2) + "\n");
+  fs.writeFileSync(config, original);
+
+  const installed = run(path.join(ROOT, "install.mjs"), [], { env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT } });
+
+  assert.equal(installed.status, 0, installed.stderr || installed.stdout);
+  assert.match(installed.stdout, /Claude workloop PreToolUse hook uses a stale or missing timeout/);
+  assert.deepEqual(fs.readFileSync(config), original);
 });
 
 test("installer diagnoses a stale codex-safe Stop timeout without editing configuration", (t) => {
@@ -80,7 +185,7 @@ test("installer diagnoses a stale Claude hard-Stop timeout without editing confi
   assert.deepEqual(fs.readFileSync(config), original);
 });
 
-test("installer does not confuse a workloop PreToolUse hook with another tool's Stop hook", (t) => {
+test("installer reports a missing Workloop Stop without confusing another tool's Stop hook", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-hook-ownership-")); const home = path.join(root, "home");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const config = path.join(home, ".codex", "hooks.json");
@@ -94,11 +199,12 @@ test("installer does not confuse a workloop PreToolUse hook with another tool's 
   const installed = run(path.join(ROOT, "install.mjs"), [], { env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT } });
 
   assert.equal(installed.status, 0, installed.stderr || installed.stdout);
-  assert.doesNotMatch(installed.stdout, /Codex workloop Stop hook/);
+  assert.match(installed.stdout, /Codex workloop Stop hook is missing/);
+  assert.doesNotMatch(installed.stdout, /legacy Codex workloop Stop hook/);
   assert.deepEqual(fs.readFileSync(config), original);
 });
 
-test("installer does not confuse a TOML workloop PreToolUse hook with Stop", (t) => {
+test("installer reports a missing TOML Workloop Stop without confusing another tool's Stop", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-hook-toml-ownership-")); const home = path.join(root, "home");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   const config = path.join(home, ".codex", "config.toml");
@@ -109,7 +215,8 @@ test("installer does not confuse a TOML workloop PreToolUse hook with Stop", (t)
   const installed = run(path.join(ROOT, "install.mjs"), [], { env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT } });
 
   assert.equal(installed.status, 0, installed.stderr || installed.stdout);
-  assert.doesNotMatch(installed.stdout, /Codex workloop Stop hook|cannot inspect Codex Hook configuration.*config\.toml/);
+  assert.match(installed.stdout, /Codex workloop Stop hook is missing/);
+  assert.doesNotMatch(installed.stdout, /legacy Codex workloop Stop hook|cannot inspect Codex Hook configuration.*config\.toml/);
   assert.deepEqual(fs.readFileSync(config), original);
 });
 
@@ -173,15 +280,144 @@ test("installer warns about a multiline dotted workloop Stop value", (t) => {
   assert.deepEqual(fs.readFileSync(config), original);
 });
 
-test("runtime-contract-5 installer refuses a contract-3 source rollback", (t) => {
+test("runtime-contract-7 installer refuses a contract-3 source rollback", (t) => {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-no-v3-rollback-")); const home = path.join(root, "home"); const source = path.join(root, "source");
   t.after(() => fs.rmSync(root, { recursive: true, force: true }));
   for (const directory of ["bin", "lib", "skills"]) fs.cpSync(path.join(ROOT, directory), path.join(source, directory), { recursive: true });
   const prims = path.join(source, "lib", "prims.mjs");
-  fs.writeFileSync(prims, fs.readFileSync(prims, "utf8").replace("const RUNTIME_CONTRACT = 5;", "const RUNTIME_CONTRACT = 3;"));
+  fs.writeFileSync(prims, fs.readFileSync(prims, "utf8").replace("const RUNTIME_CONTRACT = 7;", "const RUNTIME_CONTRACT = 3;"));
   const result = run(path.join(ROOT, "install.mjs"), [], { env: { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: source } });
   assert.notEqual(result.status, 0); assert.match(result.stderr, /refusing contract 3/);
   assert.equal(fs.existsSync(path.join(home, "bin", "workloop.mjs")), false);
+});
+
+test("Contract 7 activation gate rejects active Contract 5 and 6 source tasks", (t) => {
+  const repo = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-active-legacy-"));
+  t.after(() => fs.rmSync(repo, { recursive: true, force: true }));
+  fs.mkdirSync(path.join(repo, ".workloop"));
+  const authority = (contract, terminal = false) => `${JSON.stringify({ events: [
+    { task_id: `legacy-task-${contract}`, kind: "task_opened", payload_version: contract === 5 ? 1 : 2, payload: contract === 5 ? {} : { runtime_contract: contract } },
+    ...(terminal ? [{ task_id: `legacy-task-${contract}`, kind: "task_terminal", payload_version: 1, payload: { outcome: "abandoned" } }] : []),
+  ] })}\n`;
+  for (const contract of [5, 6]) {
+    fs.writeFileSync(path.join(repo, ".workloop", "events.jsonl"), authority(contract));
+    assert.throws(() => assertSourceActivationCompatible(repo), new RegExp(`active Contract ${contract} task blocks Contract 7 activation`));
+    fs.writeFileSync(path.join(repo, ".workloop", "events.jsonl"), authority(contract, true));
+    assert.equal(assertSourceActivationCompatible(repo).lifecycle, "terminal");
+  }
+});
+
+test("Contract 6 compatibility runtime remains pinned across Contract 7 upgrades", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-v6-pin-"));
+  const home = path.join(root, "home"); const legacySource = path.join(root, "legacy-v6");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const directory of ["bin", "lib"]) fs.cpSync(path.join(ROOT, directory), path.join(legacySource, directory), { recursive: true });
+  const legacyPrims = path.join(legacySource, "lib", "prims.mjs");
+  fs.writeFileSync(legacyPrims, fs.readFileSync(legacyPrims, "utf8").replace("const RUNTIME_CONTRACT = 7;", "const RUNTIME_CONTRACT = 6;"));
+  const legacyHash = runtimeDigest(legacySource);
+  const runtimeRoot = path.join(home, "bin", ".workloop-runtime");
+  fs.mkdirSync(runtimeRoot, { recursive: true });
+  fs.cpSync(legacySource, path.join(runtimeRoot, legacyHash), { recursive: true });
+  fs.writeFileSync(path.join(home, "bin", ".workloop-active-release.json"), `${JSON.stringify({
+    release_manifest_version: 1, release_id: legacyHash, runtime_contract: 6, runtime_digest: legacyHash,
+    managed_skills_manifest_digest: null,
+  }, null, 2)}\n`);
+
+  const base = { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT };
+  assert.equal(run(path.join(ROOT, "install.mjs"), [], { env: base }).status, 0);
+  const first = JSON.parse(fs.readFileSync(path.join(home, "bin", ".workloop-active-release.json"), "utf8"));
+  assert.equal(first.compatibility_runtimes.contract_6, legacyHash);
+  assert.ok(fs.existsSync(path.join(runtimeRoot, legacyHash)));
+
+  const nextSource = path.join(root, "next-source");
+  for (const directory of ["bin", "lib", "skills"]) fs.cpSync(path.join(ROOT, directory), path.join(nextSource, directory), { recursive: true });
+  fs.appendFileSync(path.join(nextSource, "lib", "prims.mjs"), "\n// Contract 7 compatibility upgrade fixture\n");
+  assert.equal(run(path.join(ROOT, "install.mjs"), [], { env: { ...base, WORKLOOP_INSTALL_REPO: nextSource } }).status, 0);
+  const second = JSON.parse(fs.readFileSync(path.join(home, "bin", ".workloop-active-release.json"), "utf8"));
+  assert.equal(second.compatibility_runtimes.contract_6, legacyHash);
+  assert.equal(runtimeDigest(path.join(runtimeRoot, legacyHash)), legacyHash);
+  assert.ok(fs.existsSync(path.join(runtimeRoot, legacyHash)));
+});
+
+test("Contract 5 compatibility runtime remains pinned across Contract 7 upgrades", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-v5-pin-"));
+  const home = path.join(root, "home"); const legacySource = path.join(root, "legacy");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  for (const directory of ["bin", "lib"]) fs.cpSync(path.join(ROOT, directory), path.join(legacySource, directory), { recursive: true });
+  const legacyPrims = path.join(legacySource, "lib", "prims.mjs");
+  fs.writeFileSync(legacyPrims, fs.readFileSync(legacyPrims, "utf8").replace("const RUNTIME_CONTRACT = 7;", "const RUNTIME_CONTRACT = 5;"));
+  const legacyHash = runtimeDigest(legacySource);
+  const runtimeRoot = path.join(home, "bin", ".workloop-runtime");
+  fs.mkdirSync(runtimeRoot, { recursive: true });
+  fs.cpSync(legacySource, path.join(runtimeRoot, legacyHash), { recursive: true });
+  const legacyCli = path.join(runtimeRoot, legacyHash, "bin", "workloop.mjs");
+  const legacyTaskRepo = (name) => {
+    const repo = path.join(root, name);
+    fs.mkdirSync(repo, { recursive: true });
+    fs.writeFileSync(path.join(repo, "check.mjs"), "import fs from 'node:fs'; process.exit(fs.existsSync('done') ? 0 : 1);\n");
+    fs.writeFileSync(path.join(repo, "work.txt"), "legacy active task\n");
+    const opened = run(legacyCli, ["open", "--repo", repo, "--goal", name, "--criterion-file", "check.mjs", "--criterion-policy", "default", "--alignment-because", "compatibility seal", "--files", "work.txt", "--files", "done", "--risk", "routine", "--risk-reason", "compatibility fixture", "--history-requirement", "artifact-only"], { env: { ...process.env, HOME: home, USERPROFILE: home } });
+    assert.equal(opened.status, 0, opened.stderr);
+    return repo;
+  };
+  const finishRepo = legacyTaskRepo("legacy-finish");
+  const abandonRepo = legacyTaskRepo("legacy-abandon");
+  fs.writeFileSync(path.join(home, "bin", ".workloop-active-release.json"), `${JSON.stringify({
+    release_manifest_version: 1, release_id: legacyHash, runtime_contract: 5, runtime_digest: legacyHash,
+    managed_skills_manifest_digest: null,
+  }, null, 2)}\n`);
+
+  const env = { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT };
+  assert.equal(run(path.join(ROOT, "install.mjs"), [], { env }).status, 0);
+  const first = JSON.parse(fs.readFileSync(path.join(home, "bin", ".workloop-active-release.json"), "utf8"));
+  assert.equal(first.compatibility_runtimes.contract_5, legacyHash);
+  assert.ok(fs.existsSync(path.join(runtimeRoot, legacyHash)));
+
+  const nextSource = path.join(root, "next-source");
+  for (const directory of ["bin", "lib", "skills"]) fs.cpSync(path.join(ROOT, directory), path.join(nextSource, directory), { recursive: true });
+  fs.appendFileSync(path.join(nextSource, "lib", "prims.mjs"), "\n// installer upgrade fixture\n");
+  const upgraded = run(path.join(ROOT, "install.mjs"), [], { env: { ...env, WORKLOOP_INSTALL_REPO: nextSource } });
+  assert.equal(upgraded.status, 0, upgraded.stderr);
+  const second = JSON.parse(fs.readFileSync(path.join(home, "bin", ".workloop-active-release.json"), "utf8"));
+  assert.equal(second.compatibility_runtimes.contract_5, legacyHash);
+  assert.ok(fs.existsSync(path.join(runtimeRoot, legacyHash)));
+  assert.notEqual(second.runtime_digest, first.runtime_digest);
+  assert.equal(fs.existsSync(path.join(runtimeRoot, first.runtime_digest)), false);
+
+  const finalSource = path.join(root, "final-source");
+  for (const directory of ["bin", "lib", "skills"]) fs.cpSync(path.join(ROOT, directory), path.join(finalSource, directory), { recursive: true });
+  fs.appendFileSync(path.join(finalSource, "lib", "prims.mjs"), "\n// second installer upgrade fixture\n");
+  const finalUpgrade = run(path.join(ROOT, "install.mjs"), [], { env: { ...env, WORKLOOP_INSTALL_REPO: finalSource } });
+  assert.equal(finalUpgrade.status, 0, finalUpgrade.stderr);
+  const third = JSON.parse(fs.readFileSync(path.join(home, "bin", ".workloop-active-release.json"), "utf8"));
+  assert.equal(third.compatibility_runtimes.contract_5, legacyHash);
+  assert.ok(fs.existsSync(path.join(runtimeRoot, legacyHash)));
+  assert.equal(runtimeDigest(path.join(runtimeRoot, legacyHash)), legacyHash);
+  assert.notEqual(third.runtime_digest, second.runtime_digest);
+  assert.equal(fs.existsSync(path.join(runtimeRoot, second.runtime_digest)), false);
+
+  const v6Cli = path.join(home, "bin", "workloop.mjs");
+  const finishAuthorityPath = path.join(finishRepo, ".workloop", "events.jsonl");
+  const authorityBeforeV6Reads = fs.readFileSync(finishAuthorityPath);
+  assert.equal(run(v6Cli, ["status", "--repo", finishRepo], { env: { ...process.env, HOME: home, USERPROFILE: home } }).status, 0);
+  assert.equal(run(v6Cli, ["audit", "--repo", finishRepo], { env: { ...process.env, HOME: home, USERPROFILE: home } }).status, 0);
+  assert.equal(run(v6Cli, ["report", "--repo", finishRepo, "--json"], { env: { ...process.env, HOME: home, USERPROFILE: home } }).status, 0);
+  const refusedMutation = run(v6Cli, ["amend", "--repo", finishRepo, "--goal", "forbidden Contract 6 mutation", "--reason", "compatibility boundary"], { env: { ...process.env, HOME: home, USERPROFILE: home } });
+  assert.equal(refusedMutation.status, 2);
+  assert.match(refusedMutation.stderr, /active Contract 5 task is read-only/);
+  assert.deepEqual(fs.readFileSync(finishAuthorityPath), authorityBeforeV6Reads);
+
+  const pinnedCli = path.join(runtimeRoot, third.compatibility_runtimes.contract_5, "bin", "workloop.mjs");
+
+  fs.writeFileSync(path.join(finishRepo, "done"), "yes\n");
+  const finished = run(pinnedCli, ["achieve", "--repo", finishRepo], { env: { ...process.env, HOME: home, USERPROFILE: home } });
+  assert.equal(finished.status, 0, finished.stderr);
+  const finishedStatus = JSON.parse(run(pinnedCli, ["status", "--repo", finishRepo], { env: { ...process.env, HOME: home, USERPROFILE: home } }).stdout);
+  assert.equal(finishedStatus.lifecycle.outcome, "achieved");
+  const abandoned = run(pinnedCli, ["abandon", "--repo", abandonRepo, "--reason", "compatibility abandon seal"], { env: { ...process.env, HOME: home, USERPROFILE: home } });
+  assert.equal(abandoned.status, 0, abandoned.stderr);
+  const abandonedStatus = JSON.parse(run(pinnedCli, ["status", "--repo", abandonRepo], { env: { ...process.env, HOME: home, USERPROFILE: home } }).stdout);
+  assert.equal(abandonedStatus.lifecycle.outcome, "abandoned");
 });
 
 test("installed runtime exercises the assurance matrix", (t) => {
@@ -209,7 +445,11 @@ test("installed runtime exercises the assurance matrix", (t) => {
   const floor = makeRepo("floor"); assert.equal(open(floor, ["--risk", "routine", "--risk-reason", "claimed small", "--destructive-allowed", "--reason", "irreversible"]).status, 0); assert.equal(status(floor).review_requirement.level, null);
   const waived = makeRepo("waived", true); assert.equal(open(waived, ["--review-policy", "waived", "--review-waiver-reason", "accepted"], true).status, 0); assert.equal(run(shim, ["achieve", "--repo", waived], { env }).status, 0);
   const stale = makeRepo("stale"); assert.equal(open(stale).status, 0); assert.equal(run(shim, ["review", "--repo", stale, "--level", "fresh-context", "--reviewer", "peer", "--blocking-findings", "0", "--advisory-findings", "0"], { env }).status, 0);
-  const hook = JSON.stringify({ hook_event_name: "PreToolUse", cwd: stale, tool_name: "Write", tool_input: { file_path: path.join(stale, "work.txt") } }); assert.equal(run(shim, [], { cwd: stale, env, input: hook }).status, 0); assert.equal(status(stale).review_requirement.accepted, false);
+  const hook = JSON.stringify({ hook_event_name: "PreToolUse", cwd: stale, tool_use_id: "installed-operation", tool_name: "Write", tool_input: { file_path: path.join(stale, "work.txt") } });
+  assert.equal(run(shim, ["hook", "--profile", "codex-safe", "--mode", "nudge"], { cwd: stale, env, input: hook }).status, 0);
+  fs.writeFileSync(path.join(stale, "work.txt"), "changed\n");
+  const post = JSON.stringify({ hook_event_name: "PostToolUse", cwd: stale, tool_use_id: "installed-operation", tool_name: "Write", tool_input: { file_path: path.join(stale, "work.txt") }, tool_response: { success: true } });
+  assert.equal(run(shim, ["hook", "--profile", "codex-safe", "--mode", "nudge"], { cwd: stale, env, input: post }).status, 0); assert.equal(status(stale).review_requirement.accepted, false);
   const weak = makeRepo("weak", true, true); assert.equal(open(weak, ["--risk", "routine", "--risk-reason", "reversible"], true, true).status, 0); assert.equal(run(shim, ["accept-proof-gap", "--repo", weak, "--reason", "accepted", "--granted-by", "user"], { env }).status, 2); assert.equal(status(weak).proof_assurance.state, "adequate");
 });
 
@@ -221,9 +461,36 @@ test("every installer activation interruption leaves a journal and rerun converg
     assert.notEqual(interrupted.status, 0, failpoint);
     if (failpoint !== "journal-cleaned") assert.ok(fs.existsSync(path.join(home, "bin", ".workloop-activation-journal.json")), failpoint);
     const resumed = run(path.join(ROOT, "install.mjs"), [], { env: base }); assert.equal(resumed.status, 0, `${failpoint}: ${resumed.stderr}`);
-    const info = JSON.parse(run(path.join(home, "bin", "workloop.mjs"), ["info"], { env: base }).stdout); assert.equal(info.runtime_contract, 5);
+    const info = JSON.parse(run(path.join(home, "bin", "workloop.mjs"), ["info"], { env: base }).stdout); assert.equal(info.runtime_contract, 7);
     assert.equal(fs.existsSync(path.join(home, "bin", ".workloop-activation-journal.json")), false);
   }
+});
+
+test("activation failure after a shim switch restores the previous release", (t) => {
+  const root = fs.mkdtempSync(path.join(os.tmpdir(), "workloop-install-shim-rollback-"));
+  const home = path.join(root, "home"); const source = path.join(root, "source");
+  t.after(() => fs.rmSync(root, { recursive: true, force: true }));
+  fs.mkdirSync(source, { recursive: true });
+  for (const name of ["bin", "lib", "skills"]) fs.cpSync(path.join(ROOT, name), path.join(source, name), { recursive: true });
+  for (const name of ["install.mjs", "uninstall.mjs", "package.json"]) fs.copyFileSync(path.join(ROOT, name), path.join(source, name));
+  const base = { ...process.env, HOME: home, USERPROFILE: home, WORKLOOP_INSTALL_HOME: home, WORKLOOP_INSTALL_REPO: ROOT };
+  assert.equal(run(path.join(ROOT, "install.mjs"), [], { env: base }).status, 0);
+  const shimPaths = ["workloop.mjs", "workloop.cmd", "workloop.ps1"].map((name) => path.join(home, "bin", name));
+  const before = shimPaths.map((target) => fs.readFileSync(target));
+  const managedManifest = path.join(home, "bin", ".workloop-managed-skills.json");
+  const managedSkillPaths = [".claude", ".codex"].map((runtime) => path.join(home, runtime, "skills", "workloop", "SKILL.md"));
+  const managedBefore = [managedManifest, ...managedSkillPaths].map((target) => fs.readFileSync(target));
+
+  fs.appendFileSync(path.join(source, "lib", "prims.mjs"), "\n// rollback fixture release\n");
+  fs.appendFileSync(path.join(source, "skills", "workloop", "SKILL.md"), "\nrollback fixture skill release\n");
+  const upgraded = run(path.join(source, "install.mjs"), [], { env: {
+    ...base, WORKLOOP_INSTALL_REPO: source, WORKLOOP_INSTALL_FAILPOINT: "shim-activated",
+  } });
+  assert.notEqual(upgraded.status, 0);
+  assert.deepEqual(shimPaths.map((target) => fs.readFileSync(target)), before);
+  assert.deepEqual([managedManifest, ...managedSkillPaths].map((target) => fs.readFileSync(target)), managedBefore);
+  const info = JSON.parse(run(shimPaths[0], ["info"], { env: base }).stdout);
+  assert.equal(info.runtime_contract, 7);
 });
 
 test("uninstall removes what it installed and preserves what it cannot prove is its own", (t) => {
@@ -381,7 +648,7 @@ test("the published tarball carries exactly what installing needs", (t) => {
   assert.equal(installed.status, 0, installed.stderr);
   assert.doesNotMatch(installed.stdout, /^ {2}error/m);
   const info = JSON.parse(run(path.join(home, "bin", "workloop.mjs"), ["info"], { env }).stdout);
-  assert.equal(info.name, "workloop"); assert.equal(info.runtime_contract, 5);
+  assert.equal(info.name, "workloop"); assert.equal(info.runtime_contract, 7);
   for (const skill of ["loop-core", "workloop", "judgmentloop", "meta-loop"]) {
     assert.ok(fs.existsSync(path.join(home, ".claude", "skills", skill)), `${skill} must install`);
   }

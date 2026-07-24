@@ -84,7 +84,7 @@
   <text x="275" y="420" class="ink h1">核心叶子模块（只能依赖 prims；彼此不横向导入）</text>
 
   <rect x="280" y="450" width="280" height="125" class="box pink"/>
-  <text x="302" y="485" class="ink h2">task-engine.mjs</text>
+  <text x="302" y="485" class="ink h2">authority-state.mjs</text>
   <text x="302" y="514" class="ink body">生命周期状态机</text>
   <text x="302" y="540" class="ink body">policy / budget / proof / review</text>
 
@@ -94,7 +94,7 @@
   <text x="612" y="540" class="ink body">副作用检测 + drift</text>
 
   <rect x="900" y="450" width="280" height="125" class="box yellow"/>
-  <text x="922" y="485" class="ink h2">supervision.mjs</text>
+  <text x="922" y="485" class="ink h2">hook-targets.mjs</text>
   <text x="922" y="514" class="ink body">envelope / session ownership</text>
   <text x="922" y="540" class="ink body">命令安全 + host approval key</text>
 

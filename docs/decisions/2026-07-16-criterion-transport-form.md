@@ -3,7 +3,7 @@
 日期：2026-07-16
 票：[.scratch/loop-engineering-best-practice/issues/10-criterion-transport-form.md](../../.scratch/loop-engineering-best-practice/issues/10-criterion-transport-form.md)
 维度：1（目标与判据）判据半边 × 4（裁决与信任）
-落点：**runtime**（`lib/criterion.mjs`、`lib/application.mjs`、`lib/task-engine.mjs`）+ **skills**（默认配方文本）
+落点：**runtime**（`lib/criterion.mjs`、`lib/application.mjs`、`历史任务状态运行时`）+ **skills**（默认配方文本）
 收口：owner 确认即关（本票非 02/04，不需 /plan-review）
 
 ## 一句话
@@ -33,7 +33,7 @@ verdict=unsatisfied   exec_error=null   exit_code=1
 tail="The command line is too long."
 ```
 
-policy `default` 的 `open_requirement: "unsatisfied"`（`lib/task-engine.mjs:22`，`:370` 执行）看见它要的红 → 开单成功 → CLI 打印 `opened; criterion unsatisfied`。
+policy `default` 的 `open_requirement: "unsatisfied"`（`历史任务状态运行时:22`，`:370` 执行）看见它要的红 → 开单成功 → CLI 打印 `opened; criterion unsatisfied`。
 
 `execution_error` **没有**被置位（`executionError()` 对 shell + status 1 返回 null），故下游无法用它做鉴别器。
 
@@ -55,7 +55,7 @@ policy `default` 的 `open_requirement: "unsatisfied"`（`lib/task-engine.mjs:22
 
 机制：`lib/application.mjs:625` `signature = fnv1aHex(observation.execution.output_tail)`，而 `output_tail` = `stdout + stderr` 的**最后 4096 字符**（`lib/criterion.mjs:109`）。PowerShell 往 stderr 灌 CLIXML 进度记录，超过 4096 就**把判据自己的话整个挤出窗口**。
 
-- `stuck` = 三次指纹相同（`lib/task-engine.mjs:483-484`）→ **该任务三次尝试后必 stuck，与 agent 做了什么无关**
+- `stuck` = 三次指纹相同（`历史任务状态运行时:483-484`）→ **该任务三次尝试后必 stuck，与 agent 做了什么无关**
 - 关键：attempt 4 跑的 `66ea57e0` **正是后来变绿的那个 generation**，即它是**真红**——**真红与假红在账本里同为 `4b720486`**。鉴别器不可能取材于 tail。
 
 ### 5. 判据语义被压缩去迁就载体
@@ -92,7 +92,7 @@ policy `default` 的 `open_requirement: "unsatisfied"`（`lib/task-engine.mjs:22
 
 **机器能查的下限**：TDD 的红从不是「exit 非 0」，而是「因我预期的原因失败，且我读了那条消息」——人在回路里读。机器读不了「原因对不对」，能查的下限就是**判据至少开过口**。决议 1 是 TDD 的红在机器里剩下的那部分，不是全部。
 
-**连带修复**（`applyObservationMutation`，`lib/task-engine.mjs:754-755`：attempts 与 `spent.rounds` 只在 `unsatisfied` 时累加）：假红重分类为 `indeterminate` 后不再造 attempt → 不再累积恒等指纹 → **虚假 stuck 消失**（残余见票 15）；**rounds 预算不再被没跑起来的判据烧掉**。
+**连带修复**（`applyObservationMutation`，`历史任务状态运行时:754-755`：attempts 与 `spent.rounds` 只在 `unsatisfied` 时累加）：假红重分类为 `indeterminate` 后不再造 attempt → 不再累积恒等指纹 → **虚假 stuck 消失**（残余见票 15）；**rounds 预算不再被没跑起来的判据烧掉**。
 
 ### 决议 2：`unsatisfied` 从 `exit 1` 挪走（专用号，如 3）
 

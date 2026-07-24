@@ -3,7 +3,7 @@
 - 日期:2026-07-16
 - 来源:[票 14 机器够不到的业务真相:判据退化为封条](../../.scratch/loop-engineering-best-practice/issues/14-unreachable-business-truth-seal.md)(由票 10「决议 1 的限制」节出票)
 - 状态:owner 2026-07-16 确认
-- 本 session 实读证据:A1(`1e123be8`)全部 13 个账本事件(`~/.taskloop/outcomes-v2.jsonl:37-49`)、`lib/task-engine.mjs`(proof/floor/witness 机制)、[判据传输形态决策记录](2026-07-16-criterion-transport-form.md)「决议 1 的限制」节
+- 本 session 实读证据:A1(`1e123be8`)全部 13 个账本事件(`~/.taskloop/outcomes-v2.jsonl:37-49`)、`历史任务状态运行时`(proof/floor/witness 机制)、[判据传输形态决策记录](2026-07-16-criterion-transport-form.md)「决议 1 的限制」节
 
 ## 物种定义修正(先于一切决议)
 
@@ -23,13 +23,13 @@
 
    这是 07「声明只能作用于声明,不能作用于观测」的**反向实例**:同形家族此前是「手上有观测却不用」(06/07/08/11),本票是**把声明伪装成观测来用**。红见证仪式全部发生在声明半边(翻 `status` 字段),指纹半边一次也没被仪式化——它仪式化不了。
 
-2. **红见证的逐代强索是机器规则,不是 agent 迷信**(本票查证的承重新事实):`task-engine.mjs:192-194`——`witness.criterion_generation_id !== criterion.criterion_generation_id` 即 hold 住 close(`unsatisfied_not_witnessed`),每次 amend 换代后必须重新见证一次红。而封条在验证行动完成后**无诚实红可产**(证据已在、指纹已配),agent 被机器逼着在自己写的字段上表演状态转换——seq 7「新判据默认失败见证已记录」、seq 10「修正版判据默认失败见证已记录;**恢复真实 E2E passed 状态**并执行最终验证」,两次 amend 各仪式化一次。
+2. **红见证的逐代强索是机器规则,不是 agent 迷信**(本票查证的承重新事实):`历史任务状态运行时:192-194`——`witness.criterion_generation_id !== criterion.criterion_generation_id` 即 hold 住 close(`unsatisfied_not_witnessed`),每次 amend 换代后必须重新见证一次红。而封条在验证行动完成后**无诚实红可产**(证据已在、指纹已配),agent 被机器逼着在自己写的字段上表演状态转换——seq 7「新判据默认失败见证已记录」、seq 10「修正版判据默认失败见证已记录;**恢复真实 E2E passed 状态**并执行最终验证」,两次 amend 各仪式化一次。
 
 ## 关键账本事实(与票面互补)
 
 - **机器计价链在 A1 上全部正确开火**:proof `gap`(`criterion_provenance` + `criterion_input_coverage`)→ acceptance(seq 11,`granted_by: self`)→ `provisional` → floor 抬 substantial(`proof_gap_acceptance`)→ 强制 fresh_context 评审(seq 12,reviewer `codex-field-option-review`,accepted,2 条 advisory)→ 终态 `achieved` + `proof_provisional: true`(seq 13)。**机制层没有一环失职。**
 - **但评审看不见要评的东西**:收据(`docs/test-runs/2026-07-13-field-option-team-id-stability-e2e.json`)未提交、无版本史,翻转仪式对评审者不可见。强制评审开火了,却是对着一份可任意改写且改写不留痕的文件。
-- acceptance 的 `granted_by ∈ {user, self}`(`task-engine.mjs:1034`),两个值机器都验不了真伪——「人」在 runtime 本体论边界外(16 决议 5 已裁)。
+- acceptance 的 `granted_by ∈ {user, self}`(`历史任务状态运行时:1034`),两个值机器都验不了真伪——「人」在 runtime 本体论边界外(16 决议 5 已裁)。
 
 ## 决议
 

@@ -3,7 +3,7 @@
 **类型**: 设计方案(P0 已撤回,方向修订,详见下节)
 **日期**: 2026-07-11
 **触发**: 使用中的 issue —— 窄判据绿后过早 done;结构性迁移流程成本高;"出生即红"感觉不通用
-**依据**: `lib/criterion.mjs` / `lib/task-engine.mjs` / `lib/application.mjs` 机制实读;本会话双宿主档 1 实测;10 份 loop-engineering canon(见 `../research/2026-07-11-taskloop-vs-loop-engineering.md`)
+**依据**: `lib/criterion.mjs` / `历史任务状态运行时` / `lib/application.mjs` 机制实读;本会话双宿主档 1 实测;10 份 loop-engineering canon(见 `../research/2026-07-11-taskloop-vs-loop-engineering.md`)
 
 > ## 决策更新(2026-07-11 晚):撤回自动 P0,改采显式 trust-exception
 >

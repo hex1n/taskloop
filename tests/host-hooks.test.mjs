@@ -2,6 +2,8 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  PRE_TOOL_USE_RECIPE_TIMEOUT_SECONDS,
+  POST_TOOL_USE_RECIPE_TIMEOUT_SECONDS,
   STOP_INLINE_CRITERION_SECONDS,
   STOP_RECIPE_TIMEOUT_SECONDS,
   STOP_RUNTIME_DEADLINE_SECONDS,
@@ -15,13 +17,25 @@ test("Stop capabilities separate release-only profiles from the hard gate", () =
   assert.deepEqual(hostProfileCapability("claude"), {
     stop_control: "hard",
     inline_criterion_budget_seconds: STOP_INLINE_CRITERION_SECONDS,
+    capability_id: "hostcap:v1:claude-2.1.216-pending-live-probe",
+    exhaustive_surface: false,
+    completion_events: ["PostToolUse", "PostToolUseFailure"],
+    receipt_quality: "unknown",
   });
-  for (const profile of ["codex-safe", "codex-cli-legacy", "unknown"]) {
+  for (const profile of ["codex-safe", "codex-cli-legacy"]) {
     assert.deepEqual(hostProfileCapability(profile), {
       stop_control: "release_only",
       inline_criterion_budget_seconds: 0,
+      capability_id: "hostcap:v1:codex-0.144.5-codex-safe-direct",
+      exhaustive_surface: false,
+      completion_events: ["PostToolUse"],
+      receipt_quality: "tool_specific",
     });
   }
+  assert.deepEqual(hostProfileCapability("unknown"), {
+    stop_control: "release_only", inline_criterion_budget_seconds: 0,
+    capability_id: null, exhaustive_surface: false, completion_events: [], receipt_quality: "unknown",
+  });
   assert.ok(STOP_INLINE_CRITERION_SECONDS > 0);
   assert.ok(STOP_INLINE_CRITERION_SECONDS < STOP_RUNTIME_DEADLINE_SECONDS);
   assert.ok(STOP_RUNTIME_DEADLINE_SECONDS < STOP_RECIPE_TIMEOUT_SECONDS);
@@ -29,7 +43,7 @@ test("Stop capabilities separate release-only profiles from the hard gate", () =
 
 test("codex-safe releases a held Stop without emitting resumable stdout", () => {
   const encoded = encodeHook({
-    invocation: { profile: "codex-safe", event: "stop" },
+    invocation: { profile: "codex-safe", mode: "deny", event: "stop" },
     disposition: { event: "stop", action: "hold", code: "criterion_unsatisfied", reason: "criterion unsatisfied" },
   });
 
@@ -42,7 +56,7 @@ test("codex-safe releases a held Stop without emitting resumable stdout", () => 
 
 test("only hard profiles encode a held Stop as decision:block", () => {
   assert.deepEqual(encodeHook({
-    invocation: { profile: "claude", event: "stop" },
+    invocation: { profile: "claude", mode: "deny", event: "stop" },
     disposition: { event: "stop", action: "hold", code: "criterion_unsatisfied", reason: "criterion unsatisfied" },
   }), {
     stdout: '{"decision":"block","reason":"workloop: criterion unsatisfied"}\n',
@@ -51,7 +65,7 @@ test("only hard profiles encode a held Stop as decision:block", () => {
   });
 
   assert.deepEqual(encodeHook({
-    invocation: { profile: "codex-cli-legacy", event: "stop" },
+    invocation: { profile: "codex-cli-legacy", mode: "deny", event: "stop" },
     disposition: { event: "stop", action: "hold", code: "criterion_unsatisfied", reason: "criterion unsatisfied" },
   }), {
     stdout: "",
@@ -63,12 +77,12 @@ test("only hard profiles encode a held Stop as decision:block", () => {
 test("PreToolUse deny, rewrite, and pass stay byte-exact across profiles", () => {
   for (const profile of ["claude", "codex-safe", "codex-cli-legacy", "unknown"]) {
     assert.equal(encodeHook({
-      invocation: { profile, event: "pre_tool_use" },
+      invocation: { profile, mode: "deny", event: "pre_tool_use" },
       disposition: { event: "pre_tool_use", action: "deny", reason: "write outside envelope: outside.txt" },
     }).stdout, '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"workloop: write outside envelope: outside.txt"}}\n');
 
     assert.equal(encodeHook({
-      invocation: { profile, event: "pre_tool_use" },
+      invocation: { profile, mode: "deny", event: "pre_tool_use" },
       disposition: { event: "pre_tool_use", action: "rewrite", updatedInput: { command: "export WORKLOOP_SESSION_ID='owner'; workloop status" } },
     }).stdout, '{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"allow","updatedInput":{"command":"export WORKLOOP_SESSION_ID=\'owner\'; workloop status"}}}\n');
 
@@ -77,6 +91,34 @@ test("PreToolUse deny, rewrite, and pass stay byte-exact across profiles", () =>
       disposition: { event: "pre_tool_use", action: "pass" },
     }), { stdout: "", stderr: "", exitCode: 0 });
   }
+});
+
+test("non-enforcement modes never exercise host permission or Stop authority", () => {
+  for (const mode of ["observe", "nudge"]) {
+    assert.deepEqual(encodeHook({
+      invocation: { profile: "claude", mode, event: "pre_tool_use" },
+      disposition: { event: "pre_tool_use", action: "deny", reason: "policy deviation" },
+    }), { stdout: "", stderr: "", exitCode: 0 });
+    assert.equal(encodeHook({
+      invocation: { profile: "codex-safe", mode, event: "pre_tool_use" },
+      disposition: { event: "pre_tool_use", action: "rewrite", updatedInput: { command: "workloop status" } },
+    }).stdout, '{"hookSpecificOutput":{"hookEventName":"PreToolUse","updatedInput":{"command":"workloop status"}}}\n');
+    assert.deepEqual(encodeHook({
+      invocation: { profile: "claude", mode, event: "stop" },
+      disposition: { event: "stop", action: "hold", code: "criterion_unsatisfied", reason: "criterion unsatisfied" },
+    }), { stdout: "", stderr: "", exitCode: 0 });
+  }
+});
+
+test("omitting mode defaults the wire encoder to passive host authority", () => {
+  assert.deepEqual(encodeHook({
+    invocation: { profile: "claude", event: "pre_tool_use" },
+    disposition: { event: "pre_tool_use", action: "deny", reason: "policy deviation" },
+  }), { stdout: "", stderr: "", exitCode: 0 });
+  assert.deepEqual(encodeHook({
+    invocation: { profile: "claude", event: "stop" },
+    disposition: { event: "stop", action: "hold", code: "criterion_unsatisfied", reason: "criterion unsatisfied" },
+  }), { stdout: "", stderr: "", exitCode: 0 });
 });
 
 test("Stop release is silent and an unknown held Stop is migration-safe", () => {
@@ -88,7 +130,7 @@ test("Stop release is silent and an unknown held Stop is migration-safe", () => 
   }
 
   assert.deepEqual(encodeHook({
-    invocation: { profile: "unknown", event: "stop" },
+    invocation: { profile: "unknown", mode: "deny", event: "stop" },
     disposition: { event: "stop", action: "hold", code: "criterion_unsatisfied", reason: "criterion unsatisfied" },
   }), {
     stdout: "",
@@ -125,13 +167,62 @@ test("explicit profiles decode payloads and generate self-identifying recipes", 
 
   assert.deepEqual(buildHookRecipe({ profile: "codex-safe", command: 'node "/path/workloop.mjs"' }), {
     hooks: {
-        PreToolUse: [{ matcher: "Write|Edit|MultiEdit|Bash|PowerShell|mcp__.*", hooks: [{ type: "command", command: 'node "/path/workloop.mjs" hook --profile codex-safe --mode nudge', timeout: 20 }] }],
-        Stop: [{ matcher: "*", hooks: [{ type: "command", command: 'node "/path/workloop.mjs" hook --profile codex-safe --mode nudge', timeout: STOP_RECIPE_TIMEOUT_SECONDS }] }],
+      PreToolUse: [{ matcher: "apply_patch|Write|Edit|MultiEdit|Bash|PowerShell|mcp__.*", hooks: [{ type: "command", command: 'node "/path/workloop.mjs" hook --profile codex-safe --mode nudge', statusMessage: "Observing workloop operation intent", timeout: PRE_TOOL_USE_RECIPE_TIMEOUT_SECONDS }] }],
+      PostToolUse: [{ matcher: "apply_patch|Write|Edit|MultiEdit|Bash|PowerShell|mcp__.*", hooks: [{ type: "command", command: 'node "/path/workloop.mjs" hook --profile codex-safe --mode nudge', statusMessage: "Recording workloop tool receipt", timeout: POST_TOOL_USE_RECIPE_TIMEOUT_SECONDS }] }],
+      Stop: [{ matcher: "*", hooks: [{ type: "command", command: 'node "/path/workloop.mjs" hook --profile codex-safe --mode nudge', statusMessage: "Recording workloop stop census", timeout: STOP_RECIPE_TIMEOUT_SECONDS }] }],
     },
   });
 
+  const claudeRecipe = buildHookRecipe({ profile: "claude", command: "workloop" });
+  assert.equal("statusMessage" in claudeRecipe.hooks.PreToolUse[0].hooks[0], false);
+  assert.equal("statusMessage" in claudeRecipe.hooks.PostToolUse[0].hooks[0], false);
+  assert.equal("statusMessage" in claudeRecipe.hooks.PostToolUseFailure[0].hooks[0], false);
+  assert.equal("statusMessage" in claudeRecipe.hooks.Stop[0].hooks[0], false);
+
+  const legacyCodexRecipe = buildHookRecipe({ profile: "codex-cli-legacy", command: "workloop" });
+  assert.equal(legacyCodexRecipe.hooks.PreToolUse[0].hooks[0].statusMessage, "Observing workloop operation intent");
+  assert.equal(legacyCodexRecipe.hooks.PostToolUse[0].hooks[0].statusMessage, "Recording workloop tool receipt");
+  assert.equal(legacyCodexRecipe.hooks.Stop[0].hooks[0].statusMessage, "Recording workloop stop census");
+
   assert.throws(() => decodeHook({ profile: "codex-app", payload: {} }), /unsupported hook profile: codex-app/);
   assert.throws(() => buildHookRecipe({ profile: "unknown", command: "workloop" }), /explicit hook profile required/);
+});
+
+test("PostToolUse adapters preserve correlation and emit silent acknowledgements", () => {
+  const codex = decodeHook({ profile: "codex-safe", payload: {
+    hook_event_name: "PostToolUse", cwd: "/repo", session_id: "session", tool_use_id: "operation-1",
+    tool_name: "apply_patch", tool_input: { command: "sanitized" }, tool_response: { success: true },
+  } });
+  assert.equal(codex.event, "post_tool_use");
+  assert.equal(codex.commandId, "operation-1");
+  assert.equal(codex.completionOutcome, "success");
+  assert.equal(codex.receiptQuality, "tool_specific");
+  assert.deepEqual(encodeHook({ invocation: codex, disposition: { event: "post_tool_use", action: "record" } }), { stdout: "", stderr: "", exitCode: 0 });
+
+  const codexAmbiguous = decodeHook({ profile: "codex-safe", payload: {
+    hook_event_name: "PostToolUse", cwd: "/repo", tool_use_id: "operation-ambiguous",
+    tool_name: "apply_patch", tool_input: { command: "sanitized" }, tool_response: {},
+  } });
+  assert.equal(codexAmbiguous.completionOutcome, "unknown");
+
+  const claudeFailure = decodeHook({ profile: "claude", payload: {
+    hook_event_name: "PostToolUseFailure", cwd: "/repo", tool_use_id: "operation-2",
+    tool_name: "Bash", tool_input: {}, error: "sanitized",
+  } });
+  assert.equal(claudeFailure.event, "post_tool_use_failure");
+  assert.equal(claudeFailure.completionOutcome, "failure");
+  assert.equal(claudeFailure.receiptQuality, "unknown");
+  assert.deepEqual(encodeHook({ invocation: claudeFailure, disposition: { event: "post_tool_use_failure", action: "record" } }), { stdout: "", stderr: "", exitCode: 0 });
+});
+
+test("host recipes include only completion events supported by each host", () => {
+  const claude = buildHookRecipe({ profile: "claude", command: "workloop" }).hooks;
+  assert.equal(claude.PostToolUse[0].hooks[0].timeout, POST_TOOL_USE_RECIPE_TIMEOUT_SECONDS);
+  assert.equal(claude.PostToolUseFailure[0].hooks[0].timeout, POST_TOOL_USE_RECIPE_TIMEOUT_SECONDS);
+
+  const codex = buildHookRecipe({ profile: "codex-safe", command: "workloop" }).hooks;
+  assert.equal(codex.PostToolUse[0].hooks[0].statusMessage, "Recording workloop tool receipt");
+  assert.equal("PostToolUseFailure" in codex, false);
 });
 
 test("decodeHook passes through a host command id, preferring explicit command_id over tool_use_id", () => {

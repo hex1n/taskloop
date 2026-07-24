@@ -1,56 +1,36 @@
 ---
 name: judgmentloop
-description: Run a taste-based deliverable through a pre-registered rubric, independent review, and explicit human acceptance as the terminal verb. Use when the deliverable is judged by taste — prose, design, naming, teaching material — and the done-when cannot be a plain machine check.
-argument-hint: "[deliverable + rubric + envelope]"
+description: Run rubric-gated provider reviews. Use when a deliverable needs an independent reviewer, a pre-registered rubric, a human-owned verdict artifact, and Workloop certification.
 ---
 
-# Judgmentloop
+# Judgment loop
 
-Read `../loop-core/REFERENCE.md` for the shared task, observation, lifecycle,
-closure, policy, review, envelope, session-ownership, budget, and git
-vocabulary. Read `../loop-core/ADAPTERS.md` for the adapter contract this loop
-depends on, human adjudication included. If no rubric can be written at all,
-the work is exploratory: do not open a loop, just work.
+Read the [provider authority reference](../workloop/references/REFERENCE.md)
+before opening the review task and
+[criterion adapters](../workloop/references/ADAPTERS.md)
+before implementing its gate.
 
-## 1. Pre-register the rubric
+1. Freeze the deliverable revision, rubric, reviewer independence rule, and
+   selected provider authority.
 
-Write the rubric before drafting: the named qualities the deliverable must
-show, each concrete enough that a reviewer can point at a passage and say
-which quality it fails. The rubric lives inside the adapter itself — one
-criterion file that states the qualities and reads the recorded human
-verdict — so `--criterion-file` fingerprints rubric and adjudication logic
-together at open: a rubric rewritten mid-loop to fit the draft is a new
-generation, never a silent edit.
+   Completion: the review inputs identify one immutable deliverable, one
+   pre-registered rubric, one eligible reviewer, and explicit write claims.
 
-## 2. Open
+2. Obtain the independent review and record the human verdict in an artifact
+   outside the reviewer-controlled result.
 
-Open with the rubric-bearing adapter as the criterion (`--criterion-file`
-with `--criterion-protocol tri-state`) and `steady-satisfied --reason` as the
-policy: adjudication is human, so closure stays explicit and Stop never
-auto-closes. The birth observation is unsatisfied — acceptance does not hold
-yet — which is determinate and honest. The envelope names the deliverable
-files; the criterion file stays outside the envelope.
+   Completion: the verdict binds the deliverable revision and rubric, records
+   every blocking item, and remains under human ownership.
 
-## 3. Draft against the rubric
+3. Implement a read-only criterion adapter over the bound verdict. Map rubric
+   satisfaction to exit `4`, rejection to `3`, and missing, stale, or
+   unverifiable evidence to `2`.
 
-Draft, then self-check each rubric quality before asking anyone else. The
-adapter reads recorded adjudication evidence, not the draft itself, so it
-stays unsatisfied until the human verdict lands. Do not fabricate acceptance
-evidence to move it.
+   Completion: the adapter cannot mutate the deliverable or verdict and its
+   three outcomes are reproducible from the recorded evidence.
 
-## 4. Independent review before acceptance
+4. Use the provider workflow: `open` or `join`, then task-scoped `stage` and
+   `commit` for Git work, followed by `certify`.
 
-Ask at least a `fresh_context` reviewer and conduct the review by the two-axis
-discipline in `../loop-core/REFERENCE.md`, with the rubric as the spec axis:
-judge the draft against the pre-registered rubric, feed blocking findings back
-into the draft, record the review. Reviewer prose never substitutes for the
-human verdict; it earns the right to ask for one.
-
-## 5. Human acceptance closes
-
-The terminal verb belongs to the human. Record their verdict through the
-adapter (accepted, rejected with reasons, or cannot-judge), rerun the
-criterion fresh, and close with `achieve` only on satisfied. Rejection
-reasons are the next round's input. Report as workloop does: lifecycle,
-rubric generation, reviews, touched targets versus envelope, and what the
-rubric never covered.
+   Completion: the provider records a matching receipt and certification
+   reaches `achieved` only when the rubric gate returns exit `4`.

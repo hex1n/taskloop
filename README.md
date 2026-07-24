@@ -2,268 +2,150 @@
 
 [中文说明](README.zh-CN.md)
 
-workloop is a dependency-free Node.js CLI and portable loop kernel for
-machine-verifiable agent work. It supervises one durable task at a time: the
-runtime grants scoped write authority, polices writes as they happen, re-runs
-a fresh done-when criterion, records auditable evidence, and decides whether
-the task can close. Drivers, schedulers, and OS sandboxes stay outside this
-repository.
+workloop is a dependency-free runtime for **loopengineering**: turning an
+agent's intent into a small engineering loop that can be resumed, checked, and
+handed over. A loop starts with a bounded goal and write scope, records what
+happened, runs an explicit criterion, and leaves evidence for the next human or
+agent.
 
-This repository ships four kernel skills with the runtime. The flagship skill
-carries the repository's name, the way `webpack` names both a project and its
-core package: `workloop` the CLI supervises the task, `skills/workloop` is the
-loop you run on it.
+The host owns permission prompts and execution approval. Workloop never becomes
+another approval layer; it supplies durable context and evidence around the
+host's work.
 
-- `skills/loop-core`: shared task, criterion, lifecycle, envelope, budget, and
-  host-binding vocabulary.
-- `skills/workloop`: machine-verifiable work from sourced criterion to honest
-  terminal outcome.
-- `skills/judgmentloop`: rubric and human-acceptance workflow for taste-based
-  deliverables.
-- `skills/meta-loop`: ledger-based review of how supervised loops converge,
-  stall, suspend, or bypass supervision.
+## The engineering loop
 
-## Architecture
+1. **Frame** — open a task with a goal, ownership, and bounded write scope.
+2. **Work** — let the agent and host tools make the change in the chosen root.
+3. **Observe** — retain task-local receipts without deciding whether tools run.
+4. **Verify** — run a read-only acceptance criterion and certify its result.
+5. **Continue** — query, suspend, resume, recover, or hand the loop to another
+   session without rebuilding its context from chat history.
 
-![workloop architecture](docs/workloop-balsamiq-architecture.svg)
+Git receipts, filesystem identity, recovery journals, Hooks, and outcome
+projections are mechanisms that make this loop reliable; they are not the
+product's primary workflow.
 
-![workloop loop engineering model](docs/workloop-loop-engineering-balsamiq.svg)
+## Where a loop can run
 
-## Repository Map
+Each task selects one durable provider for its workspace:
 
-- `bin/workloop.mjs` is only the process entry.
-- `lib/application.mjs` is the single assembly layer for CLI verbs, hook
-  dispatch, event commits, snapshots, projection, and reports.
-- Leaf modules in `lib/` may import only `lib/prims.mjs`; the architecture
-  suite enforces that boundary.
-- `lib/task-engine.mjs` owns lifecycle transitions, policy decisions, closure,
-  assurance, budgets, stuck detection, and review requirements.
-- `lib/event-store.mjs` owns hash-chained `.workloop/events.jsonl`
-  authority.
-- `lib/task-store.mjs` owns the digest-checked schema-v3 snapshot wrapper and
-  cross-process task lock.
-- `lib/supervision.mjs`, `lib/host-hooks.mjs`, `lib/evidence-ledger.mjs`, and
-  `lib/untracked.mjs` make hook-time write mediation, host protocol encoding,
-  bounded telemetry, and no-task nudges explicit.
-- `install.mjs` installs a versioned runtime, stable shims, and managed copies
-  of the four skills under the current user's home.
-- `tests/` covers behavior, architecture, hook protocol, runtime contract 5,
-  event storage, snapshots, installer behavior, skill closure, and Windows
-  gates.
+- **Git workspace** — main and linked worktrees can share a repository while
+  disjoint tasks retain separate write scopes and task-scoped receipts.
+- **Any filesystem directory** — an explicit `--filesystem-root` works outside
+  Git, rejects overlapping/nested loops, and needs no repository at all.
+- **Dedicated worktree** — an exclusive loop uses one explicit linked worktree
+  without changing the caller's current worktree or guessing branch cleanup.
 
-## Core Model
+The provider journal makes a loop replayable. Paths are attachments rather than
+identity: moving a workspace retains identity, while copying one requires an
+explicit recovery, reattach, or fork.
 
-Criterion observations are `unsatisfied`, `satisfied`, and `indeterminate`.
-Task lifecycle is `active`, `suspended(reason)`, or `terminal(outcome)`, where
-terminal outcomes are `achieved`, `not_needed`, and `abandoned`. Criterion
-`satisfied` is evidence, not task completion; closure is separately projected
-as `not_ready`, `held`, or `eligible`.
+## Run a loop
 
-Three named policies define open, witness, and close behavior:
+The public CLI contains only these verbs:
 
-- `default`: open unsatisfied, require an unsatisfied witness, close
-  automatically.
-- `deferred-witness` (`deferred_witness` in state): open determinate, require a
-  witness, close automatically.
-- `steady-satisfied` (`steady_satisfied` in state): open determinate, no
-  witness, close explicitly.
-
-Every criterion definition has a stable `criterion_definition_hash` and a
-non-reusable `criterion_generation_id`. Criterion or policy amendments create a
-new generation; old witnesses and reviews do not carry across it.
-
-## Basic Use
-
-```sh
-node bin/workloop.mjs open --repo . --goal "observable outcome" \
-  --criterion "npm test" --criterion-policy default \
-  --alignment-because "the suite exercises the requested behavior" \
-  --not-covered "deployed environment" \
-  --files "lib/**" --files "tests/**"
-
-node bin/workloop.mjs status --repo .
-node bin/workloop.mjs verify --repo .
-node bin/workloop.mjs achieve --repo .
+```text
+open stage commit certify status audit ledger tasks join suspend resume abandon
+recover-attachment cleanup-staged-locator reattach abandon-staged-authority
+fork-identity archive-incompatible-state hook hooks
 ```
 
-Prefer a repository-relative criterion file for portable work:
+Frame a Git-backed loop from a file or directory under the selected worktree:
 
 ```sh
-workloop open --repo . --goal "observable outcome" \
-  --criterion-file "acceptance.mjs" \
-  --criterion-protocol tri-state \
-  --criterion-policy default \
-  --alignment-because "the adapter checks the requested behavior" \
-  --not-covered "external deployment" \
-  --files "lib/**" --files "tests/**"
+node bin/workloop.mjs open \
+  --target src/widget.mjs \
+  --goal "make the widget deterministic" \
+  --write-path src/widget.mjs \
+  --write-path tests/widget.test.mjs \
+  --command-id open-widget-1 --granted-by user --reason "requested change"
+
+node bin/workloop.mjs stage --target src/widget.mjs --task-id <task-id> \
+  --command-id stage-widget-1 --granted-by user --reason "stage only this task"
+node bin/workloop.mjs commit --target src/widget.mjs --task-id <task-id> \
+  --message "fix: deterministic widget" --command-id commit-widget-1 \
+  --granted-by user --reason "commit only this task"
+node bin/workloop.mjs certify --target src/widget.mjs --task-id <task-id> \
+  --criterion-file examples/read-only-criterion.mjs --command-id certify-widget-1 \
+  --granted-by user --reason "criterion passed"
 ```
 
-Tri-state adapters use protocol version 2: exit `4` means `satisfied`, `3`
-means `unsatisfied`, and `2` means `indeterminate`. Exit `0` is treated as
-silent/indeterminate, so old 0/1 adapters must be updated before use.
+The certification adapter is read-only and uses tri-state exit codes: `4`
+means satisfied, `3` unsatisfied, and `2` indeterminate. Certification also
+requires the task's matching clean Git receipt to remain landed.
 
-Other lifecycle verbs:
+For a non-Git directory, frame the same loop explicitly with the filesystem
+provider. Git is not required:
 
 ```sh
-workloop suspend --repo . --reason needs-input --remaining "credential" \
-  --failure "cannot authenticate" --next-action "provide test access"
-workloop resume --repo . --reason "access supplied"
-workloop join --repo . --reason "continue this active task in this session"
-workloop not-needed --repo . --evidence "read-only probe showed the goal already holds"
-workloop abandon --repo . --reason "superseded"
+node bin/workloop.mjs open \
+  --filesystem-root /absolute/path/to/data \
+  --goal "repair external index" \
+  --write-path index.json --command-id open-index-1 \
+  --granted-by user --reason "requested repair"
 ```
 
-## Runtime Authority
+Use `--authority <authority-id>` for queries and recovery when an attachment is
+unavailable. `status`, `audit`, `ledger`, and `tasks` are read-only.
 
-Runtime contract 5 uses `.workloop/events.jsonl` as the only repository
-authority. `.workloop/task.json` is a schema-v3 snapshot wrapper that may be
-deleted and rebuilt from events; it is never promoted to authority. Every
-public mutation commits one hash-chained transaction before refreshing the
-snapshot.
+## Hooks observe; the host approves
 
-`~/.workloop/outcomes.jsonl` is a best-effort HOME projection, not task
-authority. Rebuild it idempotently with:
+Recipes require one explicit host profile:
 
 ```sh
-workloop sync-outcomes --repo .
-workloop audit --repo .
-workloop audit-outcomes
+node bin/workloop.mjs hooks --profile codex --mode nudge
+node bin/workloop.mjs hooks --profile claude --mode nudge
 ```
 
-Runtime contract 5 removes schema versions from active artifact names while
-leaving the versions inside their JSON/JSONL content unchanged. If a repository
-still has legacy versioned artifact names, normal commands fail closed until the
-user authorizes the one-time rename:
+`observe` and `nudge` are non-blocking instrumentation: PreToolUse records an
+operation intent, PostToolUse records a completion receipt, and Stop releases.
+If evidence is unavailable, they fail open; the host retains execution
+authority. Only an explicitly configured `deny` PreToolUse mode can return a
+rejection, and it does not replace the host's approval system.
+
+Only `codex` and `claude` are valid profiles. `codex-safe` is intentionally not
+a valid profile.
+
+## Evidence and recovery
+
+The provider journal is the source of truth. A separate, per-loop outcome shard
+is written under `WORKLOOP_AUTHORITY_HOME` (default `~/.workloop`). A missing
+or corrupt shard never changes the loop and is rebuilt on the next successful
+publication.
+
+Earlier repository artifacts are never migrated or interpreted. With explicit
+user provenance, this command copies recognized incompatible files byte-for-byte
+into `.workloop-incompatible-archive/` and leaves the source untouched:
 
 ```sh
-workloop migrate-artifact-names --repo . \
-  --reason "adopt stable artifact names" --granted-by user
+node bin/workloop.mjs archive-incompatible-state --target . \
+  --granted-by user --reason "retain pre-provider artifacts"
 ```
 
-If an older projection already occupies `outcomes.jsonl`, migration preserves
-its exact bytes under `~/.workloop/archive/` before promoting the current
-projection. Two current-schema projections remain an explicit conflict.
+## Current runtime and installation
 
-Schema-2 tasks and orphan/mixed snapshots fail closed. Preserve incompatible
-state byte-for-byte only with explicit user provenance:
-
-```sh
-workloop archive-incompatible-state --repo . \
-  --reason "runtime-contract-5 hard cutover" --granted-by user
-```
-
-`workloop info` exposes the active versions:
-
-- `runtime_contract: 5`
-- `criterion_adapter_protocol_version: 2`
-- `task_snapshot_schema_version: 3`
-- `event_record_schema_version: 2`
-- `outcome_projection_schema_version: 3`
-
-## Budgets and Safety
-
-Rounds are bounded by default. Optional write, wall-clock, and output-token
-budgets add independent bounds. Exhausting any configured budget denies further
-writes while reads and verification remain available. A fresh unsatisfied Stop
-or explicit `achieve` suspends as `out_of_budget`; a fresh satisfied criterion
-can still close the task. Repeated equivalent failures suspend as `stuck`.
-
-Command safety is deny-by-default. Git mutations and authority expansions are
-explicit grants with provenance:
-
-```sh
-workloop amend --repo . --git-allowed add \
-  --git-reason "prepare the user-requested commit" \
-  --granted-by user --reason "user requested staging"
-```
-
-Network, destructive, install-script, and publish-shaped commands require
-their matching grants. Remote download-to-shell execution requires both
-network and destructive grants. Secret dumps remain denied.
-
-The gate reads command shape, not intent, and its reach is narrower than
-those class names suggest. Network means `curl`, `wget`, and
-`Invoke-WebRequest`; secret dumps mean the common readers over well-known
-credential paths. Other egress such as `git clone`, `ssh`, and `scp`, other
-readers of those same files, and any command whose tool is assembled through
-a shell variable all pass. Treat the gate as friction against the obvious
-dangerous form: the host permission system and an OS sandbox remain the
-security boundary.
-
-Structural command parsing builds one host-dialect-aware intermediate form for
-each executable view: chain separators, invocations, nested command bodies, and
-ambiguity are computed once, then git authorization, owner safety checks, risk
-shapes, and foreign-session checks project effects from that same form. Known
-options parse exactly. An unknown option on a known tool or wrapper is treated
-as both a boolean and a value-taking option; the result is marked ambiguous and
-every plausible dangerous effect is retained. Nested `cmd`, PowerShell, and
-POSIX-shell bodies switch to their own dialect. Closed heredocs become nested
-input structures; unclassified non-remote interpreter stdin and CMD `FOR /F`
-substitution are classified once as `dynamic_exec` and fail closed instead
-of being guessed. A recognized remote-source pipe remains the separately
-grantable `remote_exec` shape.
-An entirely unrecognized wrapper or a tool name assembled through shell
-variables remains outside this structural model.
-
-## Hooks and Hosts
-
-Hook recipes require an explicit profile:
-
-```sh
-workloop hooks --profile codex-safe --mode nudge
-workloop hooks --profile claude --mode nudge
-```
-
-`codex-safe` preserves PreToolUse deny/rewrite behavior but releases a held
-Stop with zero stdout and an explanatory stderr warning; continue through an
-external driver or run `workloop achieve` explicitly. `claude` preserves Claude
-Code's session-internal `decision:block` continuation. `codex-cli-legacy` is
-only a version-pinned experiment and must not be used in Codex App.
-
-The latest episode owns Stop adjudication and the write envelope when its
-`host_session_id` is bound. Foreign sessions read and verify freely, but cannot
-write the envelope or task/git control state; use `join --reason` to transfer
-an active task or a separate worktree for parallel work.
-
-## Assurance and Review
-
-Proof assurance and change assurance are separate. A criterion or policy
-amended after an artifact write creates `criterion_assurance_gap`; strengthen
-and re-witness the proof, or explicitly record a provisional downgrade with
-`accept-proof-gap`.
-
-Change review is driven by declared risk plus machine floors. `routine` risk
-needs no review by default, `substantial` requires `fresh-context`, and
-`critical` requires `second-model`. Use `--review-policy required|waived` for
-an explicit override; every waiver requires a reason and remains audited.
-
-```sh
-workloop review --repo . --level fresh-context --reviewer peer \
-  --blocking-findings 0 --advisory-findings 0
-```
-
-Machine floors price only authority use observed by an active PreToolUse hook.
-Unused grants and absent sensors do not fabricate use. When the bounded
-evidence stream is corrupt, gapped, or truncated, `ledger --json` reports
-unknowns instead of converting missing history into clean negatives.
-
-## Install and Verify
+This release is a hard cut to the provider Contract. It accepts no old
+`current-*` command aliases, no old Hook profiles, and no compatibility runtime
+pins. It never reads or converts an earlier task runtime.
 
 ```sh
 node install.mjs
 npm test
-npm run bench:event-store -- --json
 node bin/workloop.mjs help
 ```
 
-Use `WORKLOOP_INSTALL_HOME` for manual install tests. The installer preserves
-unowned, locally modified, symlinked, or externally taken-over skill trees and
-deduplicates aliased Claude/Codex roots. It reads user-level Codex Hook
-configuration only to warn about legacy workloop Stop commands; it does not
-rewrite Hook configuration unless `--configure-codex` is explicitly supplied,
-and that flag is limited to the outcome-projection writable root.
+Installation stages one runtime digest and activates its shims only after
+managed skills succeed. Hook configuration remains host-owned: the installer
+does not rewrite it. If an existing Codex workloop Hook does not use
+`--profile codex`, installation refuses activation before it stages skills or
+replaces a shim. Update the Hook configuration manually, then rerun install.
 
-The Windows release gate runs W01-W08 on Windows 2022/2025 with Node 22/24.
-See [loop-core reference](skills/loop-core/REFERENCE.md),
-[host binding recipes](skills/loop-core/HOSTS.md), and
-[adapter contract](skills/loop-core/ADAPTERS.md) for the full contract.
+Use `WORKLOOP_INSTALL_HOME` for isolated install tests. The installer preserves
+unowned or locally modified skill trees instead of adopting them.
+
+## Verification
+
+`npm test` covers the provider transaction seam, installer activation gate,
+Git main/linked/exclusive-worktree authorities, task-scoped Git receipts,
+detached filesystem authorities, attachment recovery, and independent outcome
+shards.
